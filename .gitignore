@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# SLURM job output files
+slurm-*.out   # Standard Slurm output
