@@ -61,7 +61,7 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 MAX_JERK = 0.15
 SEQUENCE_LENGTH = 50
-NUM_SCENES = 10
+NUM_SCENES = 2000
 NUM_PLANS_PER_SCENE = 8 # 2*n^2
 PIPELINE_TIMEOUT = 36000
 

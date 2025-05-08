@@ -1,0 +1,9 @@
+Starting Singularity container: /cluster/scratch/yixili/learn_to_reach
+pybullet build time: Jan 29 2025 23:19:04
+Final data with save to /raw_data/cubby/neutral/curobo
+Temporary data will save to /tmp/tmp_data_53e0c31d-a40b-45df-80f4-dfc46335b13b/
+Using args:
+    (env_type: cubby)
+    (neutral: True)
+  0%|          | 0/2000 [00:00<?, ?it/s]Warp UserWarning: Python 3.9 or newer is recommended for running Warp, detected sys.version_info(major=3, minor=7, micro=5, releaselevel='final', serial=0)
+  0%|          | 1/2000 [00:59<32:46:56, 59.04s/it]  0%|          | 2/2000 [01:21<20:41:37, 37.29s/it]  0%|          | 3/2000 [01:48<18:07:04, 32.66s/it]  0%|          | 4/2000 [02:09<15:38:17, 28.21s/it]  0%|          | 5/2000 [02:35<15:07:50, 27.30s/it]  0%|          | 6/2000 [03:08<16:15:44, 29.36s/it]  0%|          | 7/2000 [03:31<15:01:00, 27.13s/it]  0%|          | 8/2000 [03:53<14:11:01, 25.63s/it]

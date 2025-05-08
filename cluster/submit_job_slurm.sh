@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # submit_job_slurm.sh
-# Usage: ./submit_job_slurm.sh <container_image> <pipeline_dir> <raw_dir> -- <script_args>
+# Usage: ./submit_job_slurm.sh
 
 set -euo pipefail
 
@@ -23,8 +23,8 @@ cat <<EOT > job.sh
 #SBATCH --mail-user=name@mail
 #SBATCH --job-name="training-${timestamp}"
 
-# Pass the container image and arguments to run_singularity.sh
-bash "\$1/cluster/run_singularity.sh" "\$1" "\$2" "\$3" -- "\${@:4}"
+# Run the hardcoded run_singularity.sh script
+bash "/cluster/home/yixili/data_pipeline/cluster/run_singularity.sh"
 EOT
 
 echo "Submitting job to SLURM..."
@@ -33,13 +33,3 @@ job_id=$(echo "$job_output" | awk '{print $NF}')
 echo "Submitted batch job $job_id"
 
 rm job.sh
-echo "Waiting for job $job_id to complete..."
-
-# Poll SLURM job status
-while squeue -j "$job_id" 2>/dev/null | grep -q "$job_id"; do
-  sleep 10
-done
-
-echo "Job completed. Output:"
-cat "$logfile"
-
