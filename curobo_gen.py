@@ -1,0 +1,1037 @@
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import time
+import argparse
+import uuid
+import random
+import pickle
+import numpy as np
+
+from multiprocessing import Pool
+from tqdm.auto import tqdm
+from pathlib import Path
+import h5py
+from pyquaternion import Quaternion
+from robofin.collision import FrankaSelfCollisionChecker
+from robofin.bullet import Bullet, BulletFranka
+from robofin.robots import FrankaRobot, FrankaRealRobot, FrankaGripper
+import itertools
+from geometrout.primitive import Cuboid, Cylinder
+from geometrout.transform import SE3
+from termcolor import colored
+from dataclasses import dataclass, field
+import logging
+from atob.trajectory import Trajectory
+from data_pipeline.environments.base_environment import (
+    Candidate,
+    TaskOrientedCandidate,
+    NeutralCandidate,
+    Environment,
+)
+from data_pipeline.environments.cubby_environment import (
+    CubbyEnvironment,
+    MergedCubbyEnvironment,
+)
+from data_pipeline.environments.dresser_environment import (
+    DresserEnvironment,
+)
+from data_pipeline.environments.tabletop_environment import (
+    TabletopEnvironment,
+)
+
+# CuRobo imports
+import torch
+from curobo.geom.sdf.world import CollisionCheckerType
+from curobo.geom.types import Cuboid as CuRoboCuboid, Cylinder as CuRoboCylinder, WorldConfig
+from curobo.types.base import TensorDeviceType
+from curobo.types.math import Pose
+from curobo.types.robot import JointState, RobotConfig
+from curobo.util.logger import setup_curobo_logger
+from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
+from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
+
+from prob_types import PlanningProblem
+
+from typing import Tuple, List, Union, Sequence, Optional, Any
+
+# These are the current config parameters throughout the script.
+END_EFFECTOR_FRAME = "right_gripper"
+MAX_JERK = 0.15
+SEQUENCE_LENGTH = 50
+NUM_SCENES = 10
+NUM_PLANS_PER_SCENE = 8 # 2*n^2
+PIPELINE_TIMEOUT = 36000
+
+# Environment complexity limits
+CUBOID_CUTOFF = 40
+CYLINDER_CUTOFF = 40
+
+# CuRobo specific parameters
+CUROBO_CONFIG_FILE = "franka.yml"
+CUROBO_INTERPOLATION_DT = 0.01
+CUROBO_MAX_RUNTIME = 10.0
+CUROBO_COLLISION_CHECKER = CollisionCheckerType.PRIMITIVE
+
+
+@dataclass
+class Result:
+    """
+    Describes an individual result from a single planning problem
+    """
+    start_candidate: Candidate
+    target_candidate: Candidate
+    error_codes: List[str] = field(default_factory=list)
+    cuboids: List[Cuboid] = field(default_factory=list)
+    cylinders: List[Cylinder] = field(default_factory=list)
+    global_solution: np.ndarray = field(default_factory=lambda: np.array([]))
+
+
+def convert_geometrout_to_curobo_obstacles(
+    obstacles: List[Union[Cuboid, Cylinder]]
+) -> WorldConfig:
+    """
+    Convert geometrout obstacles to CuRobo WorldConfig format
+    
+    :param obstacles List[Union[Cuboid, Cylinder]]: The obstacles in geometrout format
+    :rtype WorldConfig: The obstacles in CuRobo format
+    """
+    curobo_cuboids = []
+    curobo_cylinders = []
+    
+    for obstacle in obstacles:
+        if isinstance(obstacle, Cuboid):
+            # Extract pose: [x, y, z, qw, qx, qy, qz]
+            pose = [
+                obstacle.pose.xyz[0], 
+                obstacle.pose.xyz[1], 
+                obstacle.pose.xyz[2],
+                obstacle.pose.so3.wxyz[0],  # qw
+                obstacle.pose.so3.wxyz[1],  # qx
+                obstacle.pose.so3.wxyz[2],  # qy
+                obstacle.pose.so3.wxyz[3]   # qz
+            ]
+            
+            curobo_cuboids.append(
+                CuRoboCuboid(
+                    name=f"cuboid_{len(curobo_cuboids)}",
+                    pose=pose,
+                    dims=obstacle.dims
+                )
+            )
+        elif isinstance(obstacle, Cylinder):
+            # Extract pose: [x, y, z, qw, qx, qy, qz]
+            pose = [
+                obstacle.pose.xyz[0], 
+                obstacle.pose.xyz[1], 
+                obstacle.pose.xyz[2],
+                obstacle.pose.so3.wxyz[0],  # qw
+                obstacle.pose.so3.wxyz[1],  # qx
+                obstacle.pose.so3.wxyz[2],  # qy
+                obstacle.pose.so3.wxyz[3]   # qz
+            ]
+            
+            curobo_cylinders.append(
+                CuRoboCylinder(
+                    name=f"cylinder_{len(curobo_cylinders)}",
+                    pose=pose,
+                    radius=obstacle.radius,
+                    height=obstacle.height
+                )
+            )
+    
+    return WorldConfig(cuboid=curobo_cuboids, cylinder=curobo_cylinders)
+
+
+def convert_candidate_to_curobo_state(
+    candidate: Candidate,
+    tensor_args: TensorDeviceType
+) -> JointState:
+    """
+    Convert a Candidate object to CuRobo JointState
+    
+    :param candidate Candidate: The candidate configuration
+    :param tensor_args TensorDeviceType: Tensor device configuration
+    :rtype JointState: The configuration in CuRobo format
+    """
+    # Convert numpy array to tensor and reshape to [1, n_dof]
+    config_tensor = tensor_args.to_device(candidate.config.reshape(1, -1))
+    
+    # Create JointState from position
+    joint_state = JointState.from_position(
+        config_tensor,
+        joint_names=[
+            "panda_joint1",
+            "panda_joint2",
+            "panda_joint3",
+            "panda_joint4",
+            "panda_joint5",
+            "panda_joint6",
+            "panda_joint7",
+        ]
+    )
+    
+    return joint_state
+
+
+def convert_candidate_to_curobo_pose(
+    candidate: Candidate,
+    tensor_args: TensorDeviceType
+) -> Pose:
+    """
+    Convert a Candidate object's pose to CuRobo Pose
+    
+    :param candidate Candidate: The candidate with pose
+    :param tensor_args TensorDeviceType: Tensor device configuration
+    :rtype Pose: The pose in CuRobo format
+    """
+    
+    # Extract position [x, y, z]
+    position = tensor_args.to_device(candidate.pose.xyz).reshape(1, 3)
+    
+    # Extract quaternion [qw, qx, qy, qz]
+    quaternion = tensor_args.to_device(candidate.pose.so3.wxyz).reshape(1, 4)
+    
+    # Create Pose object
+    pose = Pose(
+        position=position,
+        quaternion=quaternion
+    )
+    
+    return pose
+
+
+def convert_curobo_path_to_numpy(
+    path: JointState
+) -> np.ndarray:
+    """
+    Convert CuRobo path to numpy array format for compatibility with the pipeline
+    
+    :param path JointState: The CuRobo path
+    :rtype np.ndarray: The path in numpy format
+    """
+    # Extract position from JointState and convert to numpy array
+    if path is None:
+        return np.array([])
+    
+    # Get the joint positions and convert to numpy
+    if isinstance(path.position, torch.Tensor):
+        return path.position.cpu().numpy()
+    return np.array(path.position)
+
+def solve_global_plan(
+    start_candidate: Candidate,
+    target_candidate: Candidate,
+    obstacles: List[Union[Cuboid, Cylinder]],
+    selfcc: FrankaSelfCollisionChecker,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Runs CuRobo motion planning to solve global plan using joint space planning and checks for collisions.
+    Downsamples the resulting paths to have a specified length.
+    
+    :param start_candidate Candidate: The candidate for the start configuration
+    :param target_candidate Candidate: The candidate for the target configuration
+    :param obstacles List[Union[Cuboid, Cylinder]]: The obstacles in the scene
+    :param selfcc FrankaSelfCollisionChecker: Self collision checker
+    :rtype Tuple[np.ndarray, np.ndarray]: Forward and backward paths
+    """
+    # 1. Initialize tensor args and device
+    tensor_args = TensorDeviceType(device=torch.device("cuda:0"))
+    
+    # 2. Convert obstacles to CuRobo WorldConfig
+    world_config = convert_geometrout_to_curobo_obstacles(obstacles)
+    
+    # 3. Set up MotionGenConfig and MotionGen
+    motion_gen_config = MotionGenConfig.load_from_robot_config(
+        "franka.yml",
+        world_config,
+        tensor_args,
+        interpolation_dt=CUROBO_INTERPOLATION_DT,
+        collision_checker_type=CUROBO_COLLISION_CHECKER,
+        num_trajopt_seeds=6,
+        num_ik_seeds=30,
+        evaluate_interpolated_trajectory=True,
+        use_cuda_graph=True,
+        # Add joint space specific parameters
+        js_trajopt_dt=0.5,
+        js_trajopt_tsteps=34,
+    )
+    
+    motion_gen = MotionGen(motion_gen_config)
+    motion_gen.warmup(enable_graph=False, warmup_js_trajopt=True)
+    
+    # 4. Convert candidates to appropriate CuRobo JointState format
+    start_state = convert_candidate_to_curobo_state(start_candidate, tensor_args)
+    target_state = convert_candidate_to_curobo_state(target_candidate, tensor_args)
+    
+    # 5. Plan using motion_gen.plan_single_js() - planning in joint space
+    result = motion_gen.plan_single_js(
+        start_state, 
+        target_state, 
+        MotionGenPlanConfig(
+            max_attempts=60,
+            timeout=CUROBO_MAX_RUNTIME,
+            enable_graph=True,
+            enable_finetune_trajopt=True
+        )
+    )
+        
+    # Check if planning succeeded
+    if not result.success.item():
+        return np.array([]), np.array([])
+    
+    # 6. Get the interpolated plan
+    forward_path = result.get_interpolated_plan()
+    if forward_path is None:
+        return np.array([]), np.array([])
+    
+    # Convert to numpy
+    forward_smoothed = convert_curobo_path_to_numpy(forward_path)
+    
+    # Downsample the forward path
+    forward_downsampled = downsample(forward_smoothed)
+    if forward_downsampled is None:
+        return np.array([]), np.array([])
+    
+    # 7. Check for self collisions
+    for q in forward_downsampled:
+        if selfcc.has_self_collision(q):
+            return np.array([]), np.array([])
+    
+    # For backward path, plan from target to start
+    backward_result = motion_gen.plan_single_js(
+        target_state,
+        start_state, 
+        MotionGenPlanConfig(
+            max_attempts=60,
+            timeout=CUROBO_MAX_RUNTIME,
+            enable_graph=True,
+            enable_finetune_trajopt=True
+        )
+    )
+    
+    if not backward_result.success.item():
+        return np.array([]), np.array([])
+    
+    backward_path = backward_result.get_interpolated_plan()
+    if backward_path is None:
+        return np.array([]), np.array([])
+    
+    backward_smoothed = convert_curobo_path_to_numpy(backward_path)
+    
+    # Downsample the backward path
+    backward_downsampled = downsample(backward_smoothed)
+    if backward_downsampled is None:
+        return np.array([]), np.array([])
+    
+    # Check for self collisions in backward path
+    for q in backward_downsampled:
+        if selfcc.has_self_collision(q):
+            return np.array([]), np.array([])
+    
+    return forward_downsampled, backward_downsampled
+
+
+def downsample(trajectory: Sequence[np.ndarray]) -> Optional[np.ndarray]:
+    """
+    Retimes the trajectory to have constant-ish velocity
+
+    :param trajectory Sequence[np.ndarray]: The trajectory
+    :rtype Optional[List[np.ndarray]]: The output trajectory, returns None if there is an error
+    """
+    with np.errstate(over="raise", divide="raise", under="raise", invalid="raise"):
+        try:
+            sampled = Trajectory.from_path(
+                trajectory, length=SEQUENCE_LENGTH
+            ).milestones
+        except Exception as _:
+            return None
+    return np.asarray(sampled)
+
+
+def has_high_jerk(trajectory: np.ndarray) -> bool:
+    """
+    Checks whether the trajectory has high jerk as a proxy for smoothness
+
+    :param trajectory np.ndarray: The trajectory
+    :rtype bool: Whether the jerk is too high
+    """
+    velocities = []
+    accelerations = []
+    for qi, qj in zip(trajectory[:-1], trajectory[1:]):
+        velocities.append(qj - qi)
+    for vi, vj in zip(velocities[:-1], velocities[1:]):
+        accelerations.append(vj - vi)
+    for ai, aj in zip(accelerations[:-1], accelerations[1:]):
+        max_jerk = np.max(np.abs(aj - ai))
+        if max_jerk > MAX_JERK:
+            return True
+    return False
+
+
+def has_self_collision(
+    trajectory: np.ndarray, selfcc: FrankaSelfCollisionChecker
+) -> bool:
+    """
+    Checks whether there are any self collisions according to Franka's internal controller
+
+    :param trajectory np.ndarray: The trajectory
+    :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                              mimic the internal Franka collision checker.
+    :rtype bool: Whether the robot has a self collision (or whether the robot would report
+                 a self collision)
+    """
+    for q in trajectory:
+        if selfcc.has_self_collision(q):
+            return True
+    return False
+
+
+def in_collision(trajectory: np.ndarray, sim: Bullet, robot: BulletFranka) -> bool:
+    """
+    Checks whether the trajectory colllides with the environment
+
+    :param trajectory np.ndarray: The trajectory
+    :param sim Bullet: A bullet simulator object loaded up with the scene and robot
+    :param robot BulletFranka: The robot in the simulator
+    :rtype bool: Whether the simulattor reports a collision
+    """
+    for i, q in enumerate(trajectory):
+        robot.marionette(q)
+        if sim.in_collision(robot, check_self=True):
+            return True
+    return False
+
+
+def violates_joint_limits(trajectory: np.ndarray) -> bool:
+    """
+    Checks whether the solution lies within the empirically determined Franka joint limits.
+    These joint limits represent what we were actually able to get the Franka to perform and
+    are a subset of the published limits.
+
+    :param trajectory np.ndarray: The trajectory
+    :rtype bool: Whether any of the configurations violate joint limits
+    """
+    for i, q in enumerate(trajectory):
+        if not FrankaRealRobot.within_limits(q):
+            return True
+    return False
+
+
+def verify_trajectory(
+    sim: Bullet,
+    robot: BulletFranka,
+    trajectory: np.ndarray,
+    final_pose: SE3,
+    goal_pose: SE3,
+    selfcc: FrankaSelfCollisionChecker,
+) -> List[str]:
+    """
+    Runs a set of checks on the trajectory to determine wheter to keep it or
+    throw it out
+
+    :param sim Bullet: A bullet simulator object loaded up with the scene
+    :param robot BulletFranka: The robot object in the simulator scene
+    :param trajectory np.ndarray: The trajectory
+    :param final_pose SE3: The final pose in the trajectory
+    :param goal_pose SE3: The goal pose
+    :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                              mimic the internal Franka collision checker.
+    :rtype List[str]: A list of strings representing any errors in this trajectory (can be
+                      used to filter out bad trajectories and/or to collect metrics on failures
+    """
+
+    error_codes = []
+    if np.linalg.norm(final_pose._xyz - goal_pose._xyz) > 0.05:
+        error_codes.append("miss")
+    if has_high_jerk(trajectory):
+        error_codes.append("high jerk")
+    if has_self_collision(trajectory, selfcc):
+        error_codes.append("self collision")
+    if in_collision(trajectory, sim, robot):
+        error_codes.append("collision")
+    if violates_joint_limits(trajectory):
+        error_codes.append("joint limit")
+    return error_codes
+
+
+def forward_backward(
+    candidate1: Candidate,
+    candidate2: Candidate,
+    cuboids: List[Cuboid],
+    cylinders: List[Cylinder],
+    selfcc: FrankaSelfCollisionChecker,
+) -> List[Result]:
+    """
+    Run the OMPL expert pipeline going forward and backward between the two candidates
+
+    :param candidate1 Candidate: The first candidate
+    :param candidate2 Candidate: The second candidate
+    :param cuboids List[Cuboid]: The cuboids in the scene
+    :param cylinders List[Cylinder]: The cylinders in the scene
+    :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                              mimic the internal Franka collision checker.
+    :rtype List[Result]: The two results, one for going from `candidate1` to `candidate2`
+                         and one for going from `candidate2` to `candidate1`
+    """
+    sim = Bullet(gui=False)
+    arm = sim.load_robot(FrankaRobot)
+    sim.load_primitives(cuboids + cylinders)
+
+    global_forward, global_backward = solve_global_plan(
+        candidate1, candidate2, cuboids + cylinders, selfcc
+    )
+    if len(global_forward) != len(global_backward):
+        logging.warning(
+            "Length of global forward and backward solutions are different--something might be buggy"
+        )
+    if len(global_forward) == 0 or len(global_backward) == 0:
+        return []
+    forward_result = Result(
+        global_solution=global_forward,
+        cuboids=cuboids,
+        cylinders=cylinders,
+        start_candidate=candidate1,
+        target_candidate=candidate2,
+    )
+    backward_result = Result(
+        global_solution=global_backward,
+        cuboids=cuboids,
+        cylinders=cylinders,
+        start_candidate=candidate2,
+        target_candidate=candidate1,
+    )
+    results = [forward_result, backward_result]
+    return results
+
+
+def exhaust_environment(
+    env: Environment, num: int, selfcc: FrankaSelfCollisionChecker
+) -> List[Result]:
+    """
+    Given a valid environment, i.e. one with at least one solvable problem,
+    generate a bunch of candidates and plan between them.
+
+    Generates roughly `num` problems in this environment and tries to solve them
+
+    :param env Environment: The environment in which to find plans
+    :param num int: The approximate number of plans to generate for this environment
+    :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                              mimic the internal Franka collision checker.
+    :rtype List[Result]: The results for this environment
+    """
+    n = int(np.round(np.sqrt(num / 2)))
+    candidates = env.gen_additional_candidate_sets(n - 1, selfcc)
+    candidates[0].append(env.demo_candidates[0])
+    candidates[1].append(env.demo_candidates[1])
+
+    results = []
+    if IS_NEUTRAL:
+        neutral_candidates = env.gen_neutral_candidates(n, selfcc)
+        random.shuffle(candidates[0])
+        random.shuffle(candidates[1])
+        if n <= 1:
+            # This code path exists for testing purposes to make sure the
+            # pipeline is working. In a typical usecase, you should be generating more
+            # data than this
+            nonneutral_candidates = candidates[0][:1]
+        else:
+            nonneutral_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
+        for c1, c2 in itertools.product(neutral_candidates, nonneutral_candidates):
+            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    else:
+        for c1, c2 in itertools.product(candidates[0], candidates[1]):
+            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    return results
+
+
+def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
+    """
+    Generates the environment itself, based on what subtype was specified to the program
+    (and is set in the global variable).
+
+    :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                              mimic the internal Franka collision checker.
+    :rtype Environment: A successfully generated environment
+    """
+    # TODO Replace the subtype check with the correct subtype or remove
+    # if environment class doesn't have subtypes
+    env_arguments = {}
+    if ENV_TYPE == "tabletop":
+        env: Environment = TabletopEnvironment()
+        env_arguments["how_many"] = np.random.randint(3, 15)
+    elif ENV_TYPE == "cubby":
+        env = CubbyEnvironment()
+    elif ENV_TYPE == "merged-cubby":
+        env = MergedCubbyEnvironment()
+    elif ENV_TYPE == "dresser":
+        env = DresserEnvironment()
+    else:
+        raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
+    success = False
+    # Continually regenerate environment until there is at least one valid solution
+    while not success:
+        # You can pass any other parameters into gen that you want here
+        success = (
+            env.gen(selfcc=selfcc, **env_arguments)
+            and len(env.cuboids) < CUBOID_CUTOFF
+            and len(env.cylinders) < CYLINDER_CUTOFF
+        )
+    return env
+
+
+def gen_single_env_data() -> Tuple[Environment, List[Result]]:
+    """
+    Generates an environment and a bunch of trajectories in it.
+
+    :rtype Tuple[Environment, List[Result]]: The environment and the trajectories in it
+    """
+    # The physical Franka's internal collision checker is more conservative than Bullet's
+    # This will allow for more realistic collision checks
+    selfcc = FrankaSelfCollisionChecker()
+
+    env = gen_valid_env(selfcc)
+    results = exhaust_environment(env, NUM_PLANS_PER_SCENE, selfcc)
+    return env, results
+
+
+def gen_single_env(_: Any):
+    """
+    Calls `gen_single_env_data` to generates a bunch of trajectories for a
+    single environment and then saves them to a temporary file.
+
+    :param _ Any: This is a throwaway needed to run the multiprocessing
+    """
+    # If we're already past the timeout, do nothing
+    if time.time() - START_TIME > PIPELINE_TIMEOUT:
+        return
+    # Set the random seeds for this process--if you don't do this, all processes
+    # will generate the same data
+    np.random.seed()
+    random.seed()
+    env, results = gen_single_env_data()
+
+    n = len(results)
+    cuboids = env.cuboids
+    cylinders = env.cylinders
+    file_name = f"{TMP_DATA_DIR}/{uuid.uuid4()}.hdf5"
+    with h5py.File(file_name, "w-") as f:
+        global_solutions = f.create_dataset("global_solutions", (n, SEQUENCE_LENGTH, 7))
+        cuboid_dims = f.create_dataset("cuboid_dims", (len(cuboids), 3))
+        cuboid_centers = f.create_dataset("cuboid_centers", (len(cuboids), 3))
+        cuboid_quats = f.create_dataset("cuboid_quaternions", (len(cuboids), 4))
+
+        cylinder_radii = f.create_dataset("cylinder_radii", (len(cylinders), 1))
+        cylinder_heights = f.create_dataset("cylinder_heights", (len(cylinders), 1))
+        cylinder_centers = f.create_dataset("cylinder_centers", (len(cylinders), 3))
+        cylinder_quats = f.create_dataset("cylinder_quaternions", (len(cylinders), 4))
+
+        for ii in range(n):
+            global_solutions[ii, :, :] = results[ii].global_solution
+        for jj in range(len(cuboids)):
+            cuboid_dims[jj, :] = cuboids[jj].dims
+            cuboid_centers[jj, :] = cuboids[jj].pose.xyz
+            cuboid_quats[jj, :] = cuboids[jj].pose.so3.wxyz
+        for kk in range(len(cylinders)):
+            cylinder_radii[kk, :] = cylinders[kk].radius
+            cylinder_heights[kk, :] = cylinders[kk].height
+            cylinder_centers[kk, :] = cylinders[kk].pose.xyz
+            cylinder_quats[kk, :] = cylinders[kk].pose.so3.wxyz
+
+
+def gen():
+    """
+    This is the single-threaded workhorse. It sequentially generates trajectories
+    for multiple environments and merges everything into a single file.
+    """
+    non_seeds = np.arange(NUM_SCENES)  # Keep for compatibility
+    
+    # Initialize CuRobo once instead of in each process
+    setup_curobo_logger("error")
+    
+    # Process environments sequentially
+    for seed in tqdm(non_seeds, total=NUM_SCENES):
+        gen_single_env(seed)
+        
+    all_files = list(Path(TMP_DATA_DIR).glob("*.hdf5"))
+    # Merge all the files generated into a large hdf5 file
+    max_cylinders = 0
+    max_cuboids = 0
+    total_trajectories = 0
+    for fi in all_files:
+        with h5py.File(fi) as f:
+            total_trajectories += len(f["global_solutions"])
+            num_cuboids = len(f["cuboid_dims"])
+            num_cylinders = len(f["cylinder_radii"])
+            if num_cuboids > max_cuboids:
+                max_cuboids = num_cuboids
+            if num_cylinders > max_cylinders:
+                max_cylinders = num_cylinders
+
+    with h5py.File(f"{FINAL_DATA_DIR}/all_data.hdf5", "w-") as f:
+        global_solutions = f.create_dataset(
+            "global_solutions", (total_trajectories, SEQUENCE_LENGTH, 7)
+        )
+        cuboid_dims = f.create_dataset(
+            "cuboid_dims", (total_trajectories, max_cuboids, 3)
+        )
+        cuboid_centers = f.create_dataset(
+            "cuboid_centers", (total_trajectories, max_cuboids, 3)
+        )
+        cuboid_quats = f.create_dataset(
+            "cuboid_quaternions", (total_trajectories, max_cuboids, 4)
+        )
+
+        cylinder_radii = f.create_dataset(
+            "cylinder_radii", (total_trajectories, max_cylinders, 1)
+        )
+        cylinder_heights = f.create_dataset(
+            "cylinder_heights", (total_trajectories, max_cylinders, 1)
+        )
+        cylinder_centers = f.create_dataset(
+            "cylinder_centers", (total_trajectories, max_cylinders, 3)
+        )
+        cylinder_quats = f.create_dataset(
+            "cylinder_quaternions", (total_trajectories, max_cylinders, 4)
+        )
+
+        chunk_start = 0
+        chunk_end = 0
+        for fi in all_files:
+            with h5py.File(fi, "r") as g:
+                chunk_end += len(g["global_solutions"])
+                global_solutions[chunk_start:chunk_end, ...] = g["global_solutions"][
+                    ...
+                ]
+
+                num_cuboids = len(g["cuboid_dims"])
+                num_cylinders = len(g["cylinder_radii"])
+                for idx in range(chunk_start, chunk_end):
+                    cuboid_dims[idx, :num_cuboids, ...] = g["cuboid_dims"][...]
+                    cuboid_centers[idx, :num_cuboids, ...] = g["cuboid_centers"][...]
+                    cuboid_quats[idx, :num_cuboids, ...] = g["cuboid_quaternions"][...]
+
+                    cylinder_radii[idx, :num_cylinders, ...] = g["cylinder_radii"][...]
+                    cylinder_heights[idx, :num_cylinders, ...] = g["cylinder_heights"][
+                        ...
+                    ]
+                    cylinder_centers[idx, :num_cylinders, ...] = g["cylinder_centers"][
+                        ...
+                    ]
+                    cylinder_quats[idx, :num_cylinders, ...] = g[
+                        "cylinder_quaternions"
+                    ][...]
+            chunk_start = chunk_end
+    for fi in all_files:
+        fi.unlink()
+
+
+def visualize_single_env():
+    env, results = gen_single_env_data()
+    if len(results) == 0:
+        print("Found no results")
+        return
+    sim = Bullet(gui=True)
+    robot = sim.load_robot(FrankaRobot)
+    sim.load_primitives(env.obstacles)
+    for r in results:
+        print("Visualizing global solution")
+        for q in r.global_solution:
+            robot.marionette(q)
+            time.sleep(0.1)
+        time.sleep(0.2)
+
+
+def generate_task_oriented_inference_data(
+    expert_pipeline: str, how_many: int, save_path: str
+):
+    selfcc = FrankaSelfCollisionChecker()
+    inference_problems = []
+    with tqdm(total=how_many) as pbar:
+        while len(inference_problems) < how_many:
+            env, all_results = gen_single_env_data()
+            if len(all_results) == 0:
+                continue
+            if expert_pipeline == "global":
+                results = all_results
+            else:
+                raise NotImplementedError(
+                    "Task oriented inference data generation only supports global"
+                )
+            for result in results:
+                if expert_pipeline == "both":
+                    plan, _ = solve_global_plan(
+                        result.start_candidate,
+                        result.target_candidate,
+                        result.cuboids + result.cylinders,
+                        selfcc,
+                    )
+                    if len(plan) == 0:
+                        continue
+
+                if hasattr(result.target_candidate, "support_volume"):
+                    target_volume = result.target_candidate.support_volume
+                else:
+                    target_volume = Cuboid(
+                        center=result.target_candidate.pose.xyz,
+                        dims=[0.05, 0.05, 0.05],
+                        quaternion=result.target_candidate.pose.so3.wxyz,
+                    )
+                inference_problems.append(
+                    PlanningProblem(
+                        target=result.target_candidate.pose,
+                        q0=result.start_candidate.config,
+                        obstacles=result.cuboids + result.cylinders,
+                        target_volume=target_volume,
+                        target_negative_volumes=result.target_candidate.negative_volumes,
+                    )
+                )
+                pbar.update(1)
+
+    with open(save_path, "wb") as f:
+        pickle.dump({ENV_TYPE: {"task_oriented": inference_problems}}, f)
+
+
+def generate_neutral_inference_data(
+    expert_pipeline: str, how_many: int, save_path: str
+):
+    selfcc = FrankaSelfCollisionChecker()
+    assert (
+        how_many % 2 == 0
+    ), "When generating neutral inference problems, the number of problems must be even"
+    to_neutral_problems = []
+    from_neutral_problems = []
+    with tqdm(total=how_many) as pbar:
+        while len(to_neutral_problems) + len(from_neutral_problems) < how_many:
+            env, all_results = gen_single_env_data()
+            if len(all_results) == 0:
+                continue
+            if expert_pipeline == "global":
+                results = all_results
+            else:
+                raise NotImplementedError(
+                    "Task oriented inference data generation only supports global"
+                )
+            for result in results:
+                if (
+                    len(to_neutral_problems) < how_many // 2
+                    and isinstance(result.start_candidate, TaskOrientedCandidate)
+                    and isinstance(result.target_candidate, NeutralCandidate)
+                ):
+                    problem_list = to_neutral_problems
+                elif (
+                    len(from_neutral_problems) < how_many // 2
+                    and isinstance(result.start_candidate, NeutralCandidate)
+                    and isinstance(result.target_candidate, TaskOrientedCandidate)
+                ):
+                    problem_list = from_neutral_problems
+                else:
+                    continue
+
+                if expert_pipeline == "both":
+                    plan, _ = solve_global_plan(
+                        result.start_candidate,
+                        result.target_candidate,
+                        result.cuboids + result.cylinders,
+                        selfcc,
+                    )
+                    if len(plan) == 0:
+                        continue
+
+                if hasattr(result.target_candidate, "support_volume"):
+                    target_volume = result.target_candidate.support_volume
+                else:
+                    target_volume = Cuboid(
+                        center=result.target_candidate.pose.xyz,
+                        dims=[0.05, 0.05, 0.05],
+                        quaternion=result.target_candidate.pose.wxyz,
+                    )
+                problem_list.append(
+                    PlanningProblem(
+                        target=result.target_candidate.pose,
+                        q0=result.start_candidate.config,
+                        obstacles=result.cuboids + result.cylinders,
+                        target_volume=target_volume,
+                        target_negative_volumes=result.target_candidate.negative_volumes,
+                    )
+                )
+                pbar.update(1)
+                break
+    with open(save_path, "wb") as f:
+        pickle.dump(
+            {
+                ENV_TYPE: {
+                    "neutral_start": from_neutral_problems,
+                    "neutral_goal": to_neutral_problems,
+                }
+            },
+            f,
+        )
+
+
+def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str):
+    """
+    Generates a file with inference data for a given scene type. If the problems are neutral
+    (as specified by the global variable), then this will generate an even number of problems.
+
+    Note that the sub-methods here are not the most efficient. For example, they generate two paths
+    for every environment instead of 1. This is for code-simplicity as performance does not matter
+    nearly as much for these examples. To generate a lot of examples, it would be best to run this
+    in a multiprocessing setting for performance (just as we do for the full data generation)
+
+    :param expert_pipeline str: The pipeline for which this problem is solvable (can be expert, global, or both)
+    :param how_many int: How many examples to generate
+    :param save_path str: The path to which the problem set should be saved
+    """
+    assert (
+        not Path(save_path).resolve().exists()
+    ), "Cannot save inference data to a file that already exists"
+
+    if IS_NEUTRAL:
+        generate_neutral_inference_data(expert_pipeline, how_many, save_path)
+    else:
+        generate_task_oriented_inference_data(expert_pipeline, how_many, save_path)
+
+
+if __name__ == "__main__":
+    """
+    This program makes heavy use of global variables. This is **not** best practice,
+    but helps immensely with constant variables that need to be set for Python multiprocessing
+    """
+    # This start time is used globally to tell the program to shut down after a
+    # configured timeout
+    global START_TIME
+    START_TIME = time.time()
+
+    np.random.seed()
+    random.seed()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "env_type",
+        choices=[
+            "tabletop",
+            "cubby",
+            "merged-cubby",
+            "dresser",
+        ],
+        help="Include this argument if there are subtypes",
+    )
+
+    parser.add_argument(
+        "--neutral",
+        action="store_true",
+        help=(
+            "If set, plans will always begin or end with a collision-free neutral pose."
+            " If not set, plans will always start and end with a task-oriented pose"
+        ),
+    )
+
+    subparsers = parser.add_subparsers(
+        help="Whether to run the full pipeline, the test pipeline, or an environment test",
+        dest="run_type",
+    )
+    run_full = subparsers.add_parser(
+        "full-pipeline",
+        help=(
+            "Run full pipeline with multiprocessing. Specific configuration (job size,"
+            " timeouts, etc) are hardcoded at the top of the file."
+        ),
+    )
+    run_full.add_argument(
+        "data_dir",
+        type=str,
+        help="An existing _empty_ directory where the output data will be saved",
+    )
+
+    test_pipeline = subparsers.add_parser(
+        "test-pipeline",
+        help=(
+            "Runs a miniature version of the full pipeline. Specific configuration (job size,"
+            " timeouts, etc) are hardcoded at the top of the file."
+        ),
+    )
+    test_pipeline.add_argument(
+        "data_dir",
+        type=str,
+        help="An existing _empty_ directory where the output data will be saved",
+    )
+
+    test_pipeline = subparsers.add_parser(
+        "test-environment",
+        help="Generates a few trajectories for a single environment and visualizes them with Pybullet",
+    )
+
+    gen_inference = subparsers.add_parser(
+        "for-inference",
+        help="Generates data that be be used to run inference on the model",
+    )
+
+    gen_inference.add_argument(
+        "expert",
+        choices=["global"],
+        help="Which expert pipeline to use when generating the data",
+    )
+
+    gen_inference.add_argument(
+        "how_many",
+        type=int,
+        help="How many problems to generate (1 problem, 1 environment). If the neutral flag is specified, this number must be even.",
+    )
+    gen_inference.add_argument(
+        "save_path",
+        type=str,
+        help="The output file to which the inference problems should be saved. Should be a .pkl file",
+    )
+
+    args = parser.parse_args()
+
+    # Used to tell all the various subprocesses whether to use neutral poses
+    global IS_NEUTRAL
+    IS_NEUTRAL = args.neutral
+
+    # Sets the env type
+    global ENV_TYPE
+    ENV_TYPE = args.env_type
+
+    if args.run_type in ["test-pipeline", "test-environment"]:
+        NUM_SCENES = 10  # The maximum number of scenes to generate in a single job
+        NUM_PLANS_PER_SCENE = (
+            4  # The number of total candidate start or goals to use to plan experts
+        )
+    elif args.run_type == "for-inference":
+        NUM_PLANS_PER_SCENE = 2
+
+    if args.run_type == "test-environment":
+        visualize_single_env()
+    elif args.run_type == "for-inference":
+        generate_inference_data(args.expert, args.how_many, args.save_path)
+    else:
+        # A temporary directory where the per-scene data will be saved
+        global TMP_DATA_DIR
+        TMP_DATA_DIR = f"/tmp/tmp_data_{uuid.uuid4()}/"
+        assert not Path(TMP_DATA_DIR).exists()
+        os.mkdir(TMP_DATA_DIR)
+        assert (
+            os.path.isdir(TMP_DATA_DIR)
+            and len(os.listdir(TMP_DATA_DIR)) == 0
+            and os.access(TMP_DATA_DIR, os.W_OK)
+        )
+
+        # The directory where the final data will be saved--checks whether it's writeable and empty
+        global FINAL_DATA_DIR
+        FINAL_DATA_DIR = args.data_dir
+        assert (
+            os.path.isdir(FINAL_DATA_DIR)
+            and len(os.listdir(FINAL_DATA_DIR)) == 0
+            and os.access(FINAL_DATA_DIR, os.W_OK)
+        )
+
+        print(f"Final data with save to {FINAL_DATA_DIR}")
+        print(f"Temporary data will save to {TMP_DATA_DIR}")
+        print("Using args:")
+        print(f"    (env_type: {args.env_type})")
+        print(f"    (neutral: {args.neutral})")
+        gen()
