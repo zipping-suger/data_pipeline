@@ -21,6 +21,6 @@ singularity exec \
   --env NVIDIA_DRIVER_CAPABILITIES=all \
   --env ACCEPT_EULA=Y \
   "${CONTAINER_IMAGE}" \
-  python3 -u /data_pipeline/curobo_gen.py cubby --neutral full-pipeline /raw_data/cubby/neutral/curobo
+  python3 -u /data_pipeline/ompl_gen.py cubby --neutral full-pipeline /raw_data/cubby/neutral/ompl2
 
 echo "Completed run."

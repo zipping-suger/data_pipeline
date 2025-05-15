@@ -4,4 +4,5 @@ __pycache__/
 *$py.class
 
 # SLURM job output files
-slurm-*.out   # Standard Slurm output
+# Add this to the root .gitignore
+cluster/slurm-*.out
