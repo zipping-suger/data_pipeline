@@ -47,6 +47,10 @@ from data_pipeline.environments.tabletop_environment import (
     TabletopEnvironment,
 )
 
+from data_pipeline.environments.free_environment import (
+    FreeSpaceEnvironment
+)
+
 from prob_types import PlanningProblem
 
 from typing import Tuple, List, Union, Sequence, Optional, Any
@@ -55,9 +59,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 1000  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 200  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    98  # The number of total candidate start or goals to use to plan experts
+    49  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 
@@ -398,6 +402,8 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = MergedCubbyEnvironment()
     elif ENV_TYPE == "dresser":
         env = DresserEnvironment()
+    elif ENV_TYPE == "free":
+        env = FreeSpaceEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
     success = False
@@ -746,6 +752,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "env_type",
         choices=[
+            "free",
             "tabletop",
             "cubby",
             "merged-cubby",

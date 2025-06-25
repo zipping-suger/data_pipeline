@@ -6,3 +6,6 @@ __pycache__/
 # SLURM job output files
 # Add this to the root .gitignore
 cluster/slurm-*.out
+
+# VsCode coverage
+.vscode
