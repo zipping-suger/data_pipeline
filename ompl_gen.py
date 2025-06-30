@@ -33,7 +33,7 @@ from atob.trajectory import Trajectory
 from data_pipeline.environments.base_environment import (
     Candidate,
     TaskOrientedCandidate,
-    NeutralCandidate,
+    FreeSpaceCandidate,
     Environment,
 )
 from data_pipeline.environments.cubby_environment import (
@@ -59,9 +59,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 100  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 4  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    98  # The number of total candidate start or goals to use to plan experts
+    4  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 
@@ -329,22 +329,31 @@ def exhaust_environment(
     candidates[1].append(env.demo_candidates[1])
 
     results = []
-    if IS_NEUTRAL:
-        neutral_candidates = env.gen_neutral_candidates(n, selfcc)
+    if prob_type == "mixed":
+        free_space_candidates = env._gen_free_space_candidates(n, selfcc)
         random.shuffle(candidates[0])
         random.shuffle(candidates[1])
         if n <= 1:
             # This code path exists for testing purposes to make sure the
             # pipeline is working. In a typical usecase, you should be generating more
             # data than this
-            nonneutral_candidates = candidates[0][:1]
+            nonfree_space_candidates = candidates[0][:1]
         else:
-            nonneutral_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
-        for c1, c2 in itertools.product(neutral_candidates, nonneutral_candidates):
+            nonfree_space_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
+        for c1, c2 in itertools.product(free_space_candidates, nonfree_space_candidates):
             results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
-    else:
+    elif prob_type == "task-oriented":
         for c1, c2 in itertools.product(candidates[0], candidates[1]):
             results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    elif prob_type == "free-space":
+         free_space_candidates_1 = env._gen_free_space_candidates(n, selfcc)
+         free_space_candidates_2 = env._gen_free_space_candidates(n, selfcc)
+         for c1, c2 in itertools.product(free_space_candidates_1, free_space_candidates_2):
+            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    else:
+        raise NotImplementedError(
+            f"Prob type {prob_type} not implemented for environment generation"
+        )
     return results
 
 
@@ -584,6 +593,55 @@ def visualize_single_env():
         time.sleep(0.2)
 
 
+def generate_free_space_inference_data(
+    expert_pipeline: str, how_many: int, save_path: str
+):
+    selfcc = FrankaSelfCollisionChecker()
+    inference_problems = []
+    with tqdm(total=how_many) as pbar:
+        while len(inference_problems) < how_many:
+            env, all_results = gen_single_env_data()
+            if len(all_results) == 0:
+                continue
+            if expert_pipeline == "global":
+                results = all_results
+            else:
+                raise NotImplementedError(
+                    "Task oriented inference data generation only supports global"
+                )
+            for result in results:
+                if expert_pipeline == "both":
+                    plan, _ = solve_global_plan(
+                        result.start_candidate,
+                        result.target_candidate,
+                        result.cuboids + result.cylinders,
+                        selfcc,
+                    )
+                    if len(plan) == 0:
+                        continue
+
+                if hasattr(result.target_candidate, "support_volume"):
+                    target_volume = result.target_candidate.support_volume
+                else:
+                    target_volume = Cuboid(
+                        center=result.target_candidate.pose.xyz,
+                        dims=[0.05, 0.05, 0.05],
+                        quaternion=result.target_candidate.pose.so3.wxyz,
+                    )
+                inference_problems.append(
+                    PlanningProblem(
+                        target=result.target_candidate.pose,
+                        q0=result.start_candidate.config,
+                        obstacles=result.cuboids + result.cylinders,
+                        target_volume=target_volume,
+                        target_negative_volumes=result.target_candidate.negative_volumes,
+                    )
+                )
+                pbar.update(1)
+
+    with open(save_path, "wb") as f:
+        pickle.dump({ENV_TYPE: {"free_space": inference_problems}}, f)
+    
 def generate_task_oriented_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
 ):
@@ -634,17 +692,17 @@ def generate_task_oriented_inference_data(
         pickle.dump({ENV_TYPE: {"task_oriented": inference_problems}}, f)
 
 
-def generate_neutral_inference_data(
+def generate_mixed_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
 ):
     selfcc = FrankaSelfCollisionChecker()
     assert (
         how_many % 2 == 0
-    ), "When generating neutral inference problems, the number of problems must be even"
-    to_neutral_problems = []
-    from_neutral_problems = []
+    ), "When generating mixed inference problems, the number of problems must be even"
+    to_free_problems = []
+    from_free_problems = []
     with tqdm(total=how_many) as pbar:
-        while len(to_neutral_problems) + len(from_neutral_problems) < how_many:
+        while len(to_free_problems) + len(from_free_problems) < how_many:
             env, all_results = gen_single_env_data()
             if len(all_results) == 0:
                 continue
@@ -656,17 +714,17 @@ def generate_neutral_inference_data(
                 )
             for result in results:
                 if (
-                    len(to_neutral_problems) < how_many // 2
+                    len(to_free_problems) < how_many // 2
                     and isinstance(result.start_candidate, TaskOrientedCandidate)
-                    and isinstance(result.target_candidate, NeutralCandidate)
+                    and isinstance(result.target_candidate, FreeSpaceCandidate)
                 ):
-                    problem_list = to_neutral_problems
+                    problem_list = to_free_problems
                 elif (
-                    len(from_neutral_problems) < how_many // 2
-                    and isinstance(result.start_candidate, NeutralCandidate)
+                    len(from_free_problems) < how_many // 2
+                    and isinstance(result.start_candidate, FreeSpaceCandidate)
                     and isinstance(result.target_candidate, TaskOrientedCandidate)
                 ):
-                    problem_list = from_neutral_problems
+                    problem_list = from_free_problems
                 else:
                     continue
 
@@ -703,8 +761,8 @@ def generate_neutral_inference_data(
         pickle.dump(
             {
                 ENV_TYPE: {
-                    "neutral_start": from_neutral_problems,
-                    "neutral_goal": to_neutral_problems,
+                    "free_start": from_free_problems,
+                    "free_goal": to_free_problems,
                 }
             },
             f,
@@ -713,7 +771,7 @@ def generate_neutral_inference_data(
 
 def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str):
     """
-    Generates a file with inference data for a given scene type. If the problems are neutral
+    Generates a file with inference data for a given scene type. If the problems are mixed
     (as specified by the global variable), then this will generate an even number of problems.
 
     Note that the sub-methods here are not the most efficient. For example, they generate two paths
@@ -729,10 +787,17 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
         not Path(save_path).resolve().exists()
     ), "Cannot save inference data to a file that already exists"
 
-    if IS_NEUTRAL:
-        generate_neutral_inference_data(expert_pipeline, how_many, save_path)
-    else:
+    if prob_type == "mixed":
+        generate_mixed_inference_data(expert_pipeline, how_many, save_path)
+    elif prob_type == "task-oriented":
         generate_task_oriented_inference_data(expert_pipeline, how_many, save_path)
+    elif prob_type == "free-space":
+        generate_free_space_inference_data(expert_pipeline, how_many, save_path)
+    else:
+        raise NotImplementedError(
+            f"Prob type {prob_type} not implemented for inference data generation"
+        )
+    
 
 
 if __name__ == "__main__":
@@ -762,14 +827,15 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--neutral",
-        action="store_true",
-        help=(
-            "If set, plans will always begin or end with a collision-free neutral pose."
-            " If not set, plans will always start and end with a task-oriented pose"
-        ),
+        "prob_type",
+        choices=[
+            "mixed",
+            "task-oriented",
+            "free-space",
+        ],
+        help="Include this argument if there are subtypes",
     )
-
+        
     subparsers = parser.add_subparsers(
         help="Whether to run the full pipeline, the test pipeline, or an environment test",
         dest="run_type",
@@ -819,7 +885,7 @@ if __name__ == "__main__":
     gen_inference.add_argument(
         "how_many",
         type=int,
-        help="How many problems to generate (1 problem, 1 environment). If the neutral flag is specified, this number must be even.",
+        help="How many problems to generate (1 problem, 1 environment). If mixed flag is specified, this number must be even.",
     )
     gen_inference.add_argument(
         "save_path",
@@ -830,8 +896,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Used to tell all the various subprocesses whether to use neutral poses
-    global IS_NEUTRAL
-    IS_NEUTRAL = args.neutral
+    global prob_type
+    prob_type = args.prob_type
 
     # Sets the env type
     global ENV_TYPE
@@ -874,5 +940,5 @@ if __name__ == "__main__":
         print(f"Temporary data will save to {TMP_DATA_DIR}")
         print("Using args:")
         print(f"    (env_type: {args.env_type})")
-        print(f"    (neutral: {args.neutral})")
+        print(f"    (prob_type: {args.prob_type})")
         gen()

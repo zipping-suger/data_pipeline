@@ -32,6 +32,7 @@ from robofin.collision import FrankaSelfCollisionChecker
 from data_pipeline.environments.base_environment import (
     TaskOrientedCandidate,
     NeutralCandidate,
+    FreeSpaceCandidate,
     Environment,
 )
 
@@ -146,6 +147,43 @@ class FreeSpaceEnvironment(Environment):
             TaskOrientedCandidate(pose=target_pose, config=target_q, negative_volumes=[]),
         )
         return True
+    
+    def _gen_free_space_candidates(
+        self, how_many: int, selfcc: FrankaSelfCollisionChecker
+    ) -> List[FreeSpaceCandidate]:
+        """
+        Generates a set of free space candidates (all collision free)
+
+        :param how_many int: How many to generate ideally--can be less if there are a lot of failures
+        :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                                  mimic the internal Franka collision checker.
+        :rtype List[FreeSpaceCandidate]: A list of free space candidates
+        """
+        sim = Bullet(gui=False)
+        gripper = sim.load_robot(FrankaGripper)
+        arm = sim.load_robot(FrankaRobot)
+        sim.load_primitives(self.obstacles)
+        candidates: List[FreeSpaceCandidate] = []
+        for _ in range(how_many * 50):
+            if len(candidates) >= how_many:
+                break
+            sample = FrankaRealRobot.random_configuration()
+            arm.marionette(sample)
+            if not (
+                sim.in_collision(arm, check_self=True)
+                or selfcc.has_self_collision(sample)
+            ):
+                pose = FrankaRealRobot.fk(sample, eff_frame="right_gripper")
+                gripper.marionette(pose)
+                if not sim.in_collision(gripper):
+                    candidates.append(
+                        FreeSpaceCandidate(
+                            config=sample,
+                            pose=pose,
+                            negative_volumes=self.cubby.support_volumes,
+                        )
+                    )
+        return candidates
 
     def _gen_neutral_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker

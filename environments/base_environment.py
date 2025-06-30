@@ -75,6 +75,17 @@ class NeutralCandidate(Candidate):
     pass
 
 
+@dataclass
+class FreeSpaceCandidate(Candidate):
+    """
+    Represents a configuration and the corresponding end-effector pose
+    (in the right_gripper frame) for a free space candidate.
+    A very random candidate that is not task oriented or neutral.
+    """
+
+    pass
+
+
 class Environment(ABC):
     def __init__(self):
         self.generated = False
@@ -159,6 +170,23 @@ class Environment(ABC):
             self.generated
         ), "Must run generate the environment before requesting additional candidates"
         return self._gen_neutral_candidates(how_many, selfcc)
+    
+    def gen_free_space_candidates(
+        self, how_many: int, selfcc: FrankaSelfCollisionChecker
+    ) -> List[FreeSpaceCandidate]:
+        """
+        Generate a set of collision free free space poses and corresponding configurations
+        (represented as FreeSpaceCandidate object)
+
+        :param how_many int: How many free space poses to generate
+        :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                                  mimic the internal Franka collision checker.
+        :rtype List[FreeSpaceCandidate]: A list of free space poses
+        """
+        assert (
+            self.generated
+        ), "Must run generate the environment before requesting additional candidates"
+        return self._gen_free_space_candidates(how_many, selfcc)
 
     @abstractmethod
     def _gen(self, selfcc: FrankaSelfCollisionChecker) -> bool:
@@ -201,5 +229,20 @@ class Environment(ABC):
         :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
                                                   mimic the internal Franka collision checker.
         :rtype List[NeutralCandidate]: A list of neutral poses
+        """
+        pass
+
+    @abstractmethod
+    def _gen_free_space_candidates(
+        self, how_many: int, selfcc: FrankaSelfCollisionChecker
+    ) -> List[FreeSpaceCandidate]:
+        """
+        Generate a set of collision free free space poses and corresponding configurations
+        (represented as FreeSpaceCandidate object)
+
+        :param how_many int: How many free space poses to generate
+        :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
+                                                  mimic the internal Franka collision checker.
+        :rtype List[FreeSpaceCandidate]: A list of free space poses
         """
         pass
