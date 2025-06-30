@@ -51,14 +51,14 @@ class FreeSpaceEnvironment(Environment):
         )
         # Define the sampling ranges for pose generation
         self.position_ranges = {
-            'x': (-0.5, 0.5),   # meters from robot base
-            'y': (-0.5, 0.5),   # meters from robot base
-            'z': (0.1, 0.8)     # meters from floor
+            'x': (-0.8, 0.8),   # meters from robot base
+            'y': (-0.8, 0.8),   # meters from robot base
+            'z': (0.0, 1.0)     # meters from floor
         }
         self.orientation_ranges = {
-            'roll': (-np.pi/4, np.pi/4),   # radians
-            'pitch': (-np.pi/4, np.pi/4),  # radians
-            'yaw': (-np.pi/2, np.pi/2)     # radians
+            'roll': (-np.pi, np.pi),   # radians
+            'pitch': (-np.pi/2, np.pi/2),  # radians
+            'yaw': (-np.pi, np.pi)     # radians
         }
 
     def generate_random_pose(self) -> SE3:
