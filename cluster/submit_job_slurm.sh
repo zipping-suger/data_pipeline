@@ -15,7 +15,6 @@ cat <<EOT > job.sh
 #!/bin/bash
 #SBATCH -n 1
 #SBATCH --cpus-per-task=96
-#SBATCH --gpus=rtx_3090:1
 #SBATCH --tmp=10G  # Request 10GB in /tmp
 #SBATCH --time=23:00:00
 #SBATCH --mem-per-cpu=4048
