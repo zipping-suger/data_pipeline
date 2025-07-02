@@ -1,25 +1,3 @@
-# MIT License
-#
-# Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES, University of Washington. All rights reserved.
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
-
 from dataclasses import dataclass
 import random
 from typing import List, Optional, Tuple
@@ -61,18 +39,33 @@ class Cubby:
     """
 
     def __init__(self):
-        self.cubby_left = radius_sample(0.7, 0.1)
-        self.cubby_right = radius_sample(-0.7, 0.1)
-        self.cubby_bottom = radius_sample(0.2, 0.1)
-        self.cubby_front = radius_sample(0.55, 0.1)
-        self.cubby_back = self.cubby_front + radius_sample(0.35, 0.2)
-        self.cubby_top = radius_sample(0.7, 0.1)
-        self.cubby_mid_h_z = radius_sample(0.45, 0.1)
-        self.cubby_mid_v_y = radius_sample(0.0, 0.1)
-        self.thickness = radius_sample(0.02, 0.01)
+        # self.cubby_left = radius_sample(0.7, 0.1)
+        # self.cubby_right = radius_sample(-0.7, 0.1)
+        # self.cubby_bottom = radius_sample(0.2, 0.1)
+        # self.cubby_front = radius_sample(0.55, 0.1)
+        # self.cubby_back = self.cubby_front + radius_sample(0.35, 0.2)
+        # self.cubby_top = radius_sample(0.7, 0.1)
+        # self.cubby_mid_h_z = radius_sample(0.45, 0.1)
+        # self.cubby_mid_v_y = radius_sample(0.0, 0.1)
+        # self.thickness = radius_sample(0.02, 0.01)
+        # self.middle_shelf_thickness = self.thickness
+        # self.center_wall_thickness = self.thickness
+        # self.in_cabinet_rotation = radius_sample(0, np.pi / 18)
+      
+        # Let's make a fixed cubby for now 
+        self.cubby_left = 0.7
+        self.cubby_right = -0.7
+        self.cubby_bottom = 0.2
+        self.cubby_front = 0.55
+        self.cubby_back = self.cubby_front + 0.35
+        self.cubby_top = 0.7
+        self.cubby_mid_h_z = 0.45
+        self.cubby_mid_v_y = 0.0
+        self.thickness = 0.02
         self.middle_shelf_thickness = self.thickness
         self.center_wall_thickness = self.thickness
-        self.in_cabinet_rotation = radius_sample(0, np.pi / 18)
+        self.in_cabinet_rotation = 0.0
+    
 
     @property
     def rotation_matrix(self) -> np.ndarray:
