@@ -22,8 +22,8 @@ singularity exec \
   --env ACCEPT_EULA=Y \
   "${CONTAINER_IMAGE}" \
   /bin/bash -c "
-  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby free-space full-pipeline /raw_data/single_cubby/free/ &&
-  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby mixed full-pipeline /raw_data/single_cubby/mixed/ &&
-  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby task-oriented full-pipeline /raw_data/single_cubby/task/
+  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby free-space full-pipeline /cluster/home/yixili/raw_data/single_cubby/free &&
+  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby mixed full-pipeline /cluster/home/yixili/raw_data/single_cubby/mixed &&
+  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby task-oriented full-pipeline /cluster/home/yixili/raw_data/single_cubby/task
 "
 echo "Completed run."
