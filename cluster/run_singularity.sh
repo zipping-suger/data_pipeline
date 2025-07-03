@@ -10,44 +10,30 @@ CONTAINER_IMAGE="/cluster/scratch/yixili/learn_to_reach"
 PIPELINE_DIR="/cluster/home/yixili/data_pipeline"
 RAW_DIR="/cluster/home/yixili/raw_data"
 
+declare -A TASKS=(
+  [free-space]=free
+  [mixed]=mixed
+  [task-oriented]=task
+)
+
 echo "Starting Singularity container: $CONTAINER_IMAGE"
-singularity exec \
-  --nv \
-  --containall --writable-tmpfs \
-  --bind "${PIPELINE_DIR}:/data_pipeline" \
-  --bind "${RAW_DIR}:/raw_data" \
-  --env PYTHONUNBUFFERED=1 \
-  --env PYTHONPATH="/data_pipeline:\${PYTHONPATH:-}" \
-  --env NVIDIA_DRIVER_CAPABILITIES=all \
-  --env ACCEPT_EULA=Y \
-  "${CONTAINER_IMAGE}" \
-  /usr/bin/python3 -u /data_pipeline/task_gen.py cubby free-space full-pipeline /raw_data/single_cubby_tasks/free/
-echo "Completed free-space."
+for TYPE in "${!TASKS[@]}"; do
+  OUTDIR="${TASKS[$TYPE]}"
+  echo "Running $TYPE..."
+  singularity exec \
+    --nv \
+    --containall --writable-tmpfs \
+    --bind "${PIPELINE_DIR}:/data_pipeline" \
+    --bind "${RAW_DIR}:/raw_data" \
+    --env PYTHONUNBUFFERED=1 \
+    --env PYTHONPATH="/data_pipeline:\${PYTHONPATH:-}" \
+    --env NVIDIA_DRIVER_CAPABILITIES=all \
+    --env ACCEPT_EULA=Y \
+    "${CONTAINER_IMAGE}" \
+    /usr/bin/python3 -u /data_pipeline/task_gen.py cubby "$TYPE" full-pipeline "/raw_data/single_cubby_tasks/$OUTDIR/"
+  echo "Completed $TYPE."
+done
 
-singularity exec \
-  --nv \
-  --containall --writable-tmpfs \
-  --bind "${PIPELINE_DIR}:/data_pipeline" \
-  --bind "${RAW_DIR}:/raw_data" \
-  --env PYTHONUNBUFFERED=1 \
-  --env PYTHONPATH="/data_pipeline:\${PYTHONPATH:-}" \
-  --env NVIDIA_DRIVER_CAPABILITIES=all \
-  --env ACCEPT_EULA=Y \
-  "${CONTAINER_IMAGE}" \
-  /usr/bin/python3 -u /data_pipeline/task_gen.py cubby mixed full-pipeline /raw_data/single_cubby_tasks/mixed/
-echo "Completed mixed."
-
-singularity exec \
-  --nv \
-  --containall --writable-tmpfs \
-  --bind "${PIPELINE_DIR}:/data_pipeline" \
-  --bind "${RAW_DIR}:/raw_data" \
-  --env PYTHONUNBUFFERED=1 \
-  --env PYTHONPATH="/data_pipeline:\${PYTHONPATH:-}" \
-  --env NVIDIA_DRIVER_CAPABILITIES=all \
-  --env ACCEPT_EULA=Y \
-  "${CONTAINER_IMAGE}" \
-  /usr/bin/python3 -u /data_pipeline/task_gen.py cubby task-oriented full-pipeline /raw_data/single_cubby_tasks/task/
-echo "Completed task-oriented."
+echo "All runs completed."
 
 echo "All runs completed."
