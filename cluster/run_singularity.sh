@@ -21,7 +21,7 @@ singularity exec \
   --env NVIDIA_DRIVER_CAPABILITIES=all \
   --env ACCEPT_EULA=Y \
   "${CONTAINER_IMAGE}" \
-  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby free-space full-pipeline /raw_data/single_cubby/free/
+  /usr/bin/python3 -u /data_pipeline/task_gen.py cubby free-space full-pipeline /raw_data/single_cubby_tasks/free/
 echo "Completed free-space."
 
 singularity exec \
@@ -34,7 +34,7 @@ singularity exec \
   --env NVIDIA_DRIVER_CAPABILITIES=all \
   --env ACCEPT_EULA=Y \
   "${CONTAINER_IMAGE}" \
-  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby mixed full-pipeline /raw_data/single_cubby/mixed/
+  /usr/bin/python3 -u /data_pipeline/task_gen.py cubby mixed full-pipeline /raw_data/single_cubby_tasks/mixed/
 echo "Completed mixed."
 
 singularity exec \
@@ -47,7 +47,7 @@ singularity exec \
   --env NVIDIA_DRIVER_CAPABILITIES=all \
   --env ACCEPT_EULA=Y \
   "${CONTAINER_IMAGE}" \
-  /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby task-oriented full-pipeline /raw_data/single_cubby/task/
+  /usr/bin/python3 -u /data_pipeline/task_gen.py cubby task-oriented full-pipeline /raw_data/single_cubby_tasks/task/
 echo "Completed task-oriented."
 
 echo "All runs completed."

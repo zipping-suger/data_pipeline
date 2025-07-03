@@ -4,7 +4,6 @@ import numpy as np
 from geometrout.transform import SE3
 from geometrout.primitive import Cuboid, Cylinder, Sphere
 
-
 Obstacles = List[Union[Cuboid, Cylinder, Sphere]]
 Trajectory = Sequence[Union[Sequence, np.ndarray]]
 
