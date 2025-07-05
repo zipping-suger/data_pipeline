@@ -49,7 +49,7 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 1000
+NUM_SCENES = 3000
 NUM_PLANS_PER_SCENE = 98
 PIPELINE_TIMEOUT = 36000  # 10 hours
 
@@ -242,7 +242,7 @@ def gen():
             if num_cylinders > max_cylinders:
                 max_cylinders = num_cylinders
 
-    with h5py.File(f"{FINAL_DATA_DIR}/problems.hdf5", "w-") as f:
+    with h5py.File(f"{FINAL_DATA_DIR}/all_data.hdf5", "w-") as f:
         # Problem datasets
         start_configs = f.create_dataset("start_configs", (total_problems, 7))
         target_configs = f.create_dataset("target_configs", (total_problems, 7))
