@@ -60,9 +60,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 10  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 2000  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    8  # The number of total candidate start or goals to use to plan experts
+    98  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 

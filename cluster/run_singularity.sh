@@ -34,7 +34,7 @@ for TYPE in "${!TASKS[@]}"; do
     --env NVIDIA_DRIVER_CAPABILITIES=all \
     --env ACCEPT_EULA=Y \
     "${CONTAINER_IMAGE}" \
-    /usr/bin/python3 -u /data_pipeline/task_gen.py cubby "$TYPE" full-pipeline "/raw_data/single_cubby_tasks2/$OUTDIR/"
+    /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby "$TYPE" full-pipeline "/raw_data/table_pretrain/$OUTDIR/"
   echo "Completed $TYPE."
 done
 
