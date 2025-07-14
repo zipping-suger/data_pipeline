@@ -16,8 +16,8 @@ RAW_DIR="/cluster/home/yixili/raw_data"
 declare -A TASKS=(
   [task-oriented]=task
   [neutral]=neutral
-  [free-space]=free
-  [mixed]=mixed
+  # [free-space]=free
+  # [mixed]=mixed
 )
 
 echo "Starting Singularity container: $CONTAINER_IMAGE"
