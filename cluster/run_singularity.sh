@@ -14,10 +14,10 @@ RAW_DIR="/cluster/home/yixili/raw_data"
 # For ompl_gen, include task-oriented, neutral to minimize the problem of multi modality
 
 declare -A TASKS=(
-  [free-space]=free
-  [mixed]=mixed
   [task-oriented]=task
   [neutral]=neutral
+  [free-space]=free
+  [mixed]=mixed
 )
 
 echo "Starting Singularity container: $CONTAINER_IMAGE"
