@@ -1,41 +1,49 @@
 #!/usr/bin/env bash
 
 # run_singularity.sh
-# Hardcoded paths and arguments for simplicity
+# Hardcoded paths and arguments for singularity execution
 
 set -euo pipefail
 
-# Hardcoded paths and arguments
+# --- Hardcoded Paths ---
 CONTAINER_IMAGE="/cluster/scratch/yixili/learn_to_reach"
 PIPELINE_DIR="/cluster/home/yixili/data_pipeline"
 RAW_DIR="/cluster/home/yixili/raw_data"
+SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
-# For task_gen include free, mixed, task-oriented, free-space
-# For ompl_gen, include task-oriented, neutral to minimize the problem of multi modality
-
+# --- Task Definitions ---
 declare -A TASKS=(
   [task-oriented]=task
   [neutral]=neutral
-  # [free-space]=free
-  # [mixed]=mixed
+  [free-space]=free
+  [mixed]=mixed
 )
 
+# --- Ensure Scratch TMP Exists ---
+mkdir -p "$SCRATCH_TMP"
+
 echo "Starting Singularity container: $CONTAINER_IMAGE"
+
 for TYPE in "${!TASKS[@]}"; do
   OUTDIR="${TASKS[$TYPE]}"
-  echo "Running $TYPE..."
+  echo "=== Running $TYPE (Output: $OUTDIR) ==="
+
+  # --- Run Singularity with Proper TMPDIR ---
   singularity exec \
     --nv \
     --containall --writable-tmpfs \
     --bind "${PIPELINE_DIR}:/data_pipeline" \
     --bind "${RAW_DIR}:/raw_data" \
+    --bind "${SCRATCH_TMP}:/tmp" \  # Bind scratch to /tmp in container
     --env PYTHONUNBUFFERED=1 \
     --env PYTHONPATH="/data_pipeline:\${PYTHONPATH:-}" \
     --env NVIDIA_DRIVER_CAPABILITIES=all \
     --env ACCEPT_EULA=Y \
+    --env TMPDIR="$SCRATCH_TMP" \  # Explicitly set TMPDIR
     "${CONTAINER_IMAGE}" \
-    /usr/bin/python3 -u /data_pipeline/ompl_gen.py cubby "$TYPE" full-pipeline "/raw_data/table_pretrain/$OUTDIR/"
-  echo "Completed $TYPE."
+    /usr/bin/python3 -u /data_pipeline/task_gen.py cubby "$TYPE" full-pipeline "/raw_data/table_finetune_tasks/$OUTDIR/"
+
+  echo "=== Completed $TYPE ==="
 done
 
 echo "All runs completed."
