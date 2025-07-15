@@ -29,17 +29,18 @@ for TYPE in "${!TASKS[@]}"; do
   echo "=== Running $TYPE (Output: $OUTDIR) ==="
 
   # --- Run Singularity with Proper TMPDIR ---
+  # Bind scratch to /tmp in container
   singularity exec \
     --nv \
     --containall --writable-tmpfs \
     --bind "${PIPELINE_DIR}:/data_pipeline" \
     --bind "${RAW_DIR}:/raw_data" \
-    --bind "${SCRATCH_TMP}:/tmp" \  # Bind scratch to /tmp in container
+    --bind "${SCRATCH_TMP}:/tmp" \
     --env PYTHONUNBUFFERED=1 \
     --env PYTHONPATH="/data_pipeline:\${PYTHONPATH:-}" \
     --env NVIDIA_DRIVER_CAPABILITIES=all \
     --env ACCEPT_EULA=Y \
-    --env TMPDIR="$SCRATCH_TMP" \  # Explicitly set TMPDIR
+    --env TMPDIR="$SCRATCH_TMP" \
     "${CONTAINER_IMAGE}" \
     /usr/bin/python3 -u /data_pipeline/task_gen.py cubby "$TYPE" full-pipeline "/raw_data/table_finetune_tasks/$OUTDIR/"
 
