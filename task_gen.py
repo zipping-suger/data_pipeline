@@ -27,6 +27,7 @@ from data_pipeline.environments.base_environment import (
     Candidate,
     TaskOrientedCandidate,
     FreeSpaceCandidate,
+    NeutralCandidate,
     Environment,
 )
 from data_pipeline.environments.cubby_environment import (
@@ -102,6 +103,19 @@ def generate_candidate_pairs(
         free_space_candidates_1 = env._gen_free_space_candidates(n, selfcc)
         free_space_candidates_2 = env._gen_free_space_candidates(n, selfcc)
         for c1, c2 in itertools.product(free_space_candidates_1, free_space_candidates_2):
+            problems.append(Problem(
+                start_candidate=c1,
+                target_candidate=c2,
+                cuboids=env.cuboids,
+                cylinders=env.cylinders
+            ))
+    elif prob_type == "neutral":  # ADD NEUTRAL BRANCH
+        neutral_candidates = env.gen_neutral_candidates(n, selfcc)
+        random.shuffle(candidates[0])
+        random.shuffle(candidates[1])
+        nonneutral_candidates = candidates[0][:n//2] + candidates[1][:n//2] if n > 1 else candidates[0][:1]
+        
+        for c1, c2 in itertools.product(neutral_candidates, nonneutral_candidates):
             problems.append(Problem(
                 start_candidate=c1,
                 target_candidate=c2,
@@ -353,7 +367,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "prob_type",
-        choices=["mixed", "task-oriented", "free-space"],
+        choices=["mixed", "task-oriented", "free-space", "neutral"],
         help="Problem type",
     )
         

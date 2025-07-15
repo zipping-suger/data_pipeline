@@ -15,8 +15,8 @@ SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 declare -A TASKS=(
   # [task-oriented]=task
   # [neutral]=neutral
-  # [free-space]=free
-  [mixed]=mixed
+  [free-space]=free
+  # [mixed]=mixed
 )
 
 # --- Ensure Scratch TMP Exists ---
