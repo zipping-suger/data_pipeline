@@ -71,16 +71,18 @@ class TabletopEnvironment(Environment):
             return False
         self.demo_candidates = [cand1, cand2]
         return True
-    
+
+
     def _gen_free_space_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker
     ) -> List[FreeSpaceCandidate]:
         """
-        Generates a set of free space candidates (all collision free)
+        Generates a set of free space candidates by first sampling poses in a specified range
+        and then solving for collision-free IK solutions.
 
         :param how_many int: How many to generate ideally--can be less if there are a lot of failures
         :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
-                                                  mimic the internal Franka collision checker.
+                                                mimic the internal Franka collision checker.
         :rtype List[FreeSpaceCandidate]: A list of free space candidates
         """
         sim = Bullet(gui=False)
@@ -88,21 +90,48 @@ class TabletopEnvironment(Environment):
         arm = sim.load_robot(FrankaRobot)
         sim.load_primitives(self.obstacles)
         candidates: List[FreeSpaceCandidate] = []
-        for _ in range(how_many * 50):
-            if len(candidates) >= how_many:
-                break
-            sample = FrankaRealRobot.random_configuration()
-            arm.marionette(sample)
-            if not (
-                sim.in_collision(arm, check_self=True)
-                or selfcc.has_self_collision(sample)
-            ):
-                pose = FrankaRealRobot.fk(sample, eff_frame="right_gripper")
-                gripper.marionette(pose)
-                if not sim.in_collision(gripper):
+
+        # Define the sampling ranges for pose generation (similar to free_environment)
+        position_ranges = {
+            "x": (0, 1),  # meters from robot base
+            "y": (-0.8, 0.8),  # meters from robot base
+            "z": (-0.1, 1),  # meters from floor
+        }
+        orientation_ranges = {
+            "roll": (-np.pi, np.pi),
+            "pitch": (-np.pi / 2, np.pi / 2),
+            "yaw": (-np.pi, np.pi),
+        }
+
+        while len(candidates) < how_many:
+            # Generate random pose within specified ranges
+            x = np.random.uniform(*position_ranges["x"])
+            y = np.random.uniform(*position_ranges["y"])
+            z = np.random.uniform(*position_ranges["z"])
+            position = np.array([x, y, z])
+
+            roll = np.random.uniform(*orientation_ranges["roll"])
+            pitch = np.random.uniform(*orientation_ranges["pitch"])
+            yaw = np.random.uniform(*orientation_ranges["yaw"])
+
+            pose = SE3(xyz=position, rpy=[roll, pitch, yaw])
+
+            # Check gripper collision
+            gripper.marionette(pose)
+            if sim.in_collision(gripper):
+                continue
+
+            # Solve IK
+            q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=5)
+            if q is not None:
+                arm.marionette(q)
+                if not (
+                    sim.in_collision(arm, check_self=True)
+                    or selfcc.has_self_collision(q)
+                ):
                     candidates.append(
                         FreeSpaceCandidate(
-                            config=sample,
+                            config=q,
                             pose=pose,
                             negative_volumes=self.cubby.support_volumes,
                         )

@@ -9,3 +9,6 @@ cluster/slurm-*.out
 
 # VsCode coverage
 .vscode
+
+# Problem data
+*.pkl
