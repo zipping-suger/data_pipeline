@@ -52,6 +52,10 @@ from data_pipeline.environments.free_environment import (
     FreeSpaceEnvironment
 )
 
+from data_pipeline.environments.pillar_environment import (
+    PillarEnvironment
+)
+
 from prob_types import PlanningProblem
 
 from typing import Tuple, List, Union, Sequence, Optional, Any
@@ -427,6 +431,8 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = DresserEnvironment()
     elif ENV_TYPE == "free":
         env = FreeSpaceEnvironment()
+    elif ENV_TYPE == "pillar":
+        env = PillarEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
     success = False
@@ -910,6 +916,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "env_type",
         choices=[
+            "pillar",
             "free",
             "tabletop",
             "cubby",

@@ -17,165 +17,258 @@ from robofin.robots import FrankaRobot
 from geometrout.primitive import Cuboid, Cylinder
 from geometrout.transform import SE3
 
+
 def load_obstacles_from_hdf5(file_path, trajectory_idx=0):
     """
     Load obstacles (cuboids and cylinders) from an HDF5 file
     """
     obstacles = []
-    
-    with h5py.File(file_path, 'r') as f:
+
+    with h5py.File(file_path, "r") as f:
         # Load cuboids
-        if 'cuboid_dims' in f:
-            cuboid_dims = f['cuboid_dims'][trajectory_idx]
-            cuboid_centers = f['cuboid_centers'][trajectory_idx]
-            cuboid_quats = f['cuboid_quaternions'][trajectory_idx]
-            
+        if "cuboid_dims" in f:
+            cuboid_dims = f["cuboid_dims"][trajectory_idx]
+            cuboid_centers = f["cuboid_centers"][trajectory_idx]
+            cuboid_quats = f["cuboid_quaternions"][trajectory_idx]
+
             for i in range(len(cuboid_dims)):
                 if np.all(cuboid_dims[i] == 0):
                     continue
-                obstacles.append(Cuboid(
-                    center=cuboid_centers[i],
-                    dims=cuboid_dims[i],
-                    quaternion=cuboid_quats[i]
-                ))
-        
+                obstacles.append(
+                    Cuboid(
+                        center=cuboid_centers[i],
+                        dims=cuboid_dims[i],
+                        quaternion=cuboid_quats[i],
+                    )
+                )
+
         # Load cylinders
-        if 'cylinder_radii' in f:
-            cylinder_radii = f['cylinder_radii'][trajectory_idx]
-            cylinder_heights = f['cylinder_heights'][trajectory_idx]
-            cylinder_centers = f['cylinder_centers'][trajectory_idx]
-            cylinder_quats = f['cylinder_quaternions'][trajectory_idx]
-            
+        if "cylinder_radii" in f:
+            cylinder_radii = f["cylinder_radii"][trajectory_idx]
+            cylinder_heights = f["cylinder_heights"][trajectory_idx]
+            cylinder_centers = f["cylinder_centers"][trajectory_idx]
+            cylinder_quats = f["cylinder_quaternions"][trajectory_idx]
+
             for i in range(len(cylinder_radii)):
                 if cylinder_radii[i][0] == 0 or cylinder_heights[i][0] == 0:
                     continue
-                obstacles.append(Cylinder(
-                    center=cylinder_centers[i],
-                    radius=float(cylinder_radii[i][0]),
-                    height=float(cylinder_heights[i][0]),
-                    quaternion=cylinder_quats[i]
-                ))
-    
+                obstacles.append(
+                    Cylinder(
+                        center=cylinder_centers[i],
+                        radius=float(cylinder_radii[i][0]),
+                        height=float(cylinder_heights[i][0]),
+                        quaternion=cylinder_quats[i],
+                    )
+                )
+
     return obstacles
 
-def visualize_all_trajectories(file_path, start_idx=0, max_trajectories=None, delay=0.1, pause_between=1.0):
+
+def visualize_all_trajectories(
+    file_path,
+    start_idx=0,
+    max_trajectories=None,
+    delay=0.1,
+    pause_between=1.0,
+    key=None,
+):
     """
     Visualize all trajectories from an HDF5 file
-    
+
     Args:
         file_path: Path to the HDF5 file
         start_idx: Index to start visualization from
         max_trajectories: Maximum number of trajectories to visualize (None for all)
         delay: Time delay between frames (seconds)
         pause_between: Time to pause between trajectories (seconds)
+        key: The HDF5 key for the trajectory data (e.g., 'global_solutions')
     """
     # Setup PyBullet simulation (only once)
     sim = Bullet(gui=True)
     robot = sim.load_robot(FrankaRobot)
-    
+
     # Open file and get number of trajectories
-    with h5py.File(file_path, 'r') as f:
-        if 'global_solutions' not in f:
-            print(f"Error: No trajectories found in {file_path}")
+    with h5py.File(file_path, "r") as f:
+        # Determine the correct key for trajectories
+        trajectory_key = key
+        if trajectory_key is None:
+            # Auto-detect if no key is provided
+            if "hybrid_solutions" in f:
+                trajectory_key = "hybrid_solutions"
+            elif "global_solutions" in f:
+                trajectory_key = "global_solutions"
+            else:
+                print(
+                    f"Error: No 'hybrid_solutions' or 'global_solutions' key found in {file_path}"
+                )
+                print("Please specify a key with the --key argument.")
+                return
+        elif trajectory_key not in f:
+            # Handle case where the specified key doesn't exist
+            print(f"Error: Specified key '{trajectory_key}' not found in {file_path}")
             return
-            
-        num_trajectories = f['global_solutions'].shape[0]
-        print(f"Found {num_trajectories} trajectories in {file_path}")
-        
+
+        num_trajectories = f[trajectory_key].shape[0]
+        print(
+            f"Found {num_trajectories} trajectories in {file_path} under key '{trajectory_key}'"
+        )
+
         # Determine end index
-        end_idx = num_trajectories if max_trajectories is None else min(start_idx + max_trajectories, num_trajectories)
-        
+        end_idx = (
+            num_trajectories
+            if max_trajectories is None
+            else min(start_idx + max_trajectories, num_trajectories)
+        )
+
         # Visualize each trajectory
         for idx in range(start_idx, end_idx):
             # Clear previous obstacles
             sim.clear_all_obstacles()
-            
+
             # Load obstacles for this trajectory
             obstacles = load_obstacles_from_hdf5(file_path, idx)
             sim.load_primitives(obstacles)
-            
+
             # Load trajectory
-            trajectory = f['global_solutions'][idx]
-            
+            trajectory = f[trajectory_key][idx]
+
             # Print info
             print(f"\nTrajectory {idx}/{num_trajectories-1}:")
             print(f"  Shape: {trajectory.shape}")
             print(f"  Obstacles: {len(obstacles)}")
-            
+
             # Execute trajectory
             for q in trajectory:
                 robot.marionette(q)
                 time.sleep(delay)
-            
+
             # Pause between trajectories
             if idx < end_idx - 1:  # Don't pause after the last trajectory
                 print(f"Pausing for {pause_between} seconds before next trajectory...")
                 time.sleep(pause_between)
-    
+
     print("\nAll trajectories visualized.")
 
-def visualize_trajectory(file_path, trajectory_idx=0, delay=0.1):
+
+def visualize_trajectory(file_path, trajectory_idx=0, delay=0.1, key=None):
     """
     Visualize a single trajectory from an HDF5 file
     """
-    with h5py.File(file_path, 'r') as f:
-        if 'global_solutions' not in f:
-            print(f"Error: No trajectories found in {file_path}")
+    trajectory_key = None
+    with h5py.File(file_path, "r") as f:
+        # Determine the correct key for trajectories
+        trajectory_key = key
+        if trajectory_key is None:
+            # Auto-detect if no key is provided
+            if "hybrid_solutions" in f:
+                trajectory_key = "hybrid_solutions"
+            elif "global_solutions" in f:
+                trajectory_key = "global_solutions"
+            else:
+                print(
+                    f"Error: No 'hybrid_solutions' or 'global_solutions' key found in {file_path}"
+                )
+                print("Please specify a key with the --key argument.")
+                return
+        elif trajectory_key not in f:
+            # Handle case where the specified key doesn't exist
+            print(f"Error: Specified key '{trajectory_key}' not found in {file_path}")
             return
-            
-        num_trajectories = f['global_solutions'].shape[0]
+
+        num_trajectories = f[trajectory_key].shape[0]
         if trajectory_idx >= num_trajectories:
-            print(f"Error: Trajectory index {trajectory_idx} out of range (0-{num_trajectories-1})")
+            print(
+                f"Error: Trajectory index {trajectory_idx} out of range (0-{num_trajectories-1}) for key '{trajectory_key}'"
+            )
             return
-            
-        trajectory = f['global_solutions'][trajectory_idx]
-    
+
+        trajectory = f[trajectory_key][trajectory_idx]
+
     obstacles = load_obstacles_from_hdf5(file_path, trajectory_idx)
-    
+
     sim = Bullet(gui=True)
     robot = sim.load_robot(FrankaRobot)
     sim.load_primitives(obstacles)
-    
-    print(f"Visualizing trajectory {trajectory_idx} from {file_path}")
+
+    print(
+        f"Visualizing trajectory {trajectory_idx} (from key '{trajectory_key}') from {file_path}"
+    )
     print(f"Trajectory shape: {trajectory.shape}")
     print(f"Number of obstacles: {len(obstacles)}")
-    
+
     for q in trajectory:
         robot.marionette(q)
         time.sleep(delay)
-    
+
     input("Press Enter to exit...")
     p.disconnect()
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Visualize motion planning trajectories from HDF5 files')
-    parser.add_argument('file_path', type=str, help='Path to the HDF5 file')
-    parser.add_argument('--trajectory', '-t', type=int, default=None, 
-                        help='Index of the trajectory to visualize (default: None, visualize all)')
-    parser.add_argument('--delay', '-d', type=float, default=0.1,
-                        help='Time delay between frames in seconds (default: 0.1)')
-    parser.add_argument('--start', '-s', type=int, default=0,
-                        help='Starting trajectory index when visualizing multiple (default: 0)')
-    parser.add_argument('--max', '-m', type=int, default=None,
-                        help='Maximum number of trajectories to visualize (default: all)')
-    parser.add_argument('--pause', '-p', type=float, default=1.0,
-                        help='Pause time between trajectories in seconds (default: 1.0)')
+    parser = argparse.ArgumentParser(
+        description="Visualize motion planning trajectories from HDF5 files"
+    )
+    parser.add_argument("file_path", type=str, help="Path to the HDF5 file")
+    parser.add_argument(
+        "--trajectory",
+        "-t",
+        type=int,
+        default=None,
+        help="Index of the trajectory to visualize (default: None, visualize all)",
+    )
+    parser.add_argument(
+        "--key",
+        "-k",
+        type=str,
+        default=None,
+        help="Explicitly specify the trajectory key (e.g., global_solutions). If not provided, it will auto-detect.",
+    )
+    parser.add_argument(
+        "--delay",
+        "-d",
+        type=float,
+        default=0.1,
+        help="Time delay between frames in seconds (default: 0.1)",
+    )
+    parser.add_argument(
+        "--start",
+        "-s",
+        type=int,
+        default=0,
+        help="Starting trajectory index when visualizing multiple (default: 0)",
+    )
+    parser.add_argument(
+        "--max",
+        "-m",
+        type=int,
+        default=None,
+        help="Maximum number of trajectories to visualize (default: all)",
+    )
+    parser.add_argument(
+        "--pause",
+        "-p",
+        type=float,
+        default=0.0,
+        help="Pause time between trajectories in seconds (default: 1.0)",
+    )
     args = parser.parse_args()
-    
+
     if not Path(args.file_path).exists():
         print(f"Error: File {args.file_path} does not exist")
         return
-    
+
     if args.trajectory is not None:
-        visualize_trajectory(args.file_path, args.trajectory, args.delay)
+        visualize_trajectory(args.file_path, args.trajectory, args.delay, key=args.key)
     else:
         visualize_all_trajectories(
-            args.file_path, 
-            start_idx=args.start, 
-            max_trajectories=args.max, 
+            args.file_path,
+            start_idx=args.start,
+            max_trajectories=args.max,
             delay=args.delay,
-            pause_between=args.pause
+            pause_between=args.pause,
+            key=args.key,
         )
+
 
 if __name__ == "__main__":
     main()

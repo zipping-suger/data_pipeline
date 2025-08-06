@@ -34,6 +34,7 @@ from atob.trajectory import Trajectory
 from data_pipeline.environments.base_environment import (
     Candidate,
     TaskOrientedCandidate,
+    FreeSpaceCandidate,
     NeutralCandidate,
     Environment,
 )
@@ -48,6 +49,11 @@ from data_pipeline.environments.tabletop_environment import (
     TabletopEnvironment,
 )
 
+from data_pipeline.environments.free_environment import FreeSpaceEnvironment
+
+from data_pipeline.environments.pillar_environment import PillarEnvironment
+
+
 from prob_types import PlanningProblem
 
 from typing import Tuple, List, Union, Sequence, Optional, Any
@@ -57,9 +63,9 @@ PLANNED_PATH_LENGTH = 300  # An OMPL parameter for interpolations
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 TERMINATION_RADIUS = 0.15  # Helpful for Lula because it struggles with convergence
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 6000  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 2  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    98  # The number of total candidate start or goals to use to plan experts
+    8  # The number of total candidate start or goals to use to plan experts
 )
 MAX_JERK = 0.15  # Used for validating the hybrid expert trajectories
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
@@ -198,7 +204,7 @@ def get_fabric_chunks(
     ).exists(), "The hardcoded Isaac Sim URDF file does not exist (are you running this in the docker?)--replace with a valid path"
     fabric_robot_description_path = str(
         Path(__file__).resolve().parent.parent.parent
-        / "config"
+        / "learn_to_reach/data_pipeline/config"
         / "franka_robot_description.yaml"
     )
     assert Path(
@@ -206,7 +212,7 @@ def get_fabric_chunks(
     ).exists(), f"{fabric_robot_description_path} not found"
     fabric_config_path = str(
         Path(__file__).resolve().parent.parent.parent
-        / "config"
+        / "learn_to_reach/data_pipeline/config"
         / "franka_fabric_config.yaml"
     )
     assert Path(fabric_config_path).exists(), f"{fabric_config_path} not found"
@@ -531,7 +537,22 @@ def exhaust_environment(
     candidates[1].append(env.demo_candidates[1])
 
     results = []
-    if IS_NEUTRAL:
+    if prob_type == "mixed":
+        free_space_candidates = env._gen_free_space_candidates(n, selfcc)
+        random.shuffle(candidates[0])
+        random.shuffle(candidates[1])
+        if n <= 1:
+            # This code path exists for testing purposes to make sure the
+            # pipeline is working. In a typical usecase, you should be generating more
+            # data than this
+            nonfree_space_candidates = candidates[0][:1]
+        else:
+            nonfree_space_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
+        for c1, c2 in itertools.product(
+            free_space_candidates, nonfree_space_candidates
+        ):
+            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    elif prob_type == "neutral":
         neutral_candidates = env.gen_neutral_candidates(n, selfcc)
         random.shuffle(candidates[0])
         random.shuffle(candidates[1])
@@ -544,9 +565,20 @@ def exhaust_environment(
             nonneutral_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
         for c1, c2 in itertools.product(neutral_candidates, nonneutral_candidates):
             results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
-    else:
+    elif prob_type == "task-oriented":
         for c1, c2 in itertools.product(candidates[0], candidates[1]):
             results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    elif prob_type == "free-space":
+        free_space_candidates_1 = env._gen_free_space_candidates(n, selfcc)
+        free_space_candidates_2 = env._gen_free_space_candidates(n, selfcc)
+        for c1, c2 in itertools.product(
+            free_space_candidates_1, free_space_candidates_2
+        ):
+            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+    else:
+        raise NotImplementedError(
+            f"Prob type {prob_type} not implemented for environment generation"
+        )
     return results
 
 
@@ -604,6 +636,10 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = MergedCubbyEnvironment()
     elif ENV_TYPE == "dresser":
         env = DresserEnvironment()
+    elif ENV_TYPE == "free":
+        env = FreeSpaceEnvironment()
+    elif ENV_TYPE == "pillar":
+        env = PillarEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
     success = False
@@ -797,6 +833,131 @@ def visualize_single_env():
         time.sleep(0.2)
 
 
+def generate_free_space_inference_data(
+    expert_pipeline: str, how_many: int, save_path: str
+):
+    selfcc = FrankaSelfCollisionChecker()
+    inference_problems = []
+    with tqdm(total=how_many) as pbar:
+        while len(inference_problems) < how_many:
+            env, all_results = gen_single_env_data()
+            if len(all_results) == 0:
+                continue
+            if expert_pipeline == "global":
+                results = all_results
+            else:
+                raise NotImplementedError(
+                    "Task oriented inference data generation only supports global"
+                )
+            for result in results:
+                if expert_pipeline == "both":
+                    plan, _ = solve_global_plan(
+                        result.start_candidate,
+                        result.target_candidate,
+                        result.cuboids + result.cylinders,
+                        selfcc,
+                    )
+                    if len(plan) == 0:
+                        continue
+
+                if hasattr(result.target_candidate, "support_volume"):
+                    target_volume = result.target_candidate.support_volume
+                else:
+                    target_volume = Cuboid(
+                        center=result.target_candidate.pose.xyz,
+                        dims=[0.05, 0.05, 0.05],
+                        quaternion=result.target_candidate.pose.so3.wxyz,
+                    )
+                inference_problems.append(
+                    PlanningProblem(
+                        target=result.target_candidate.pose,
+                        q0=result.start_candidate.config,
+                        obstacles=result.cuboids + result.cylinders,
+                        target_volume=target_volume,
+                        target_negative_volumes=result.target_candidate.negative_volumes,
+                    )
+                )
+                pbar.update(1)
+
+    with open(save_path, "wb") as f:
+        pickle.dump({ENV_TYPE: {"free_space": inference_problems}}, f)
+
+
+def generate_mixed_inference_data(expert_pipeline: str, how_many: int, save_path: str):
+    selfcc = FrankaSelfCollisionChecker()
+    assert (
+        how_many % 2 == 0
+    ), "When generating mixed inference problems, the number of problems must be even"
+    to_free_problems = []
+    from_free_problems = []
+    with tqdm(total=how_many) as pbar:
+        while len(to_free_problems) + len(from_free_problems) < how_many:
+            env, all_results = gen_single_env_data()
+            if len(all_results) == 0:
+                continue
+            if expert_pipeline == "global":
+                results = all_results
+            else:
+                raise NotImplementedError(
+                    "Task oriented inference data generation only supports global"
+                )
+            for result in results:
+                if (
+                    len(to_free_problems) < how_many // 2
+                    and isinstance(result.start_candidate, TaskOrientedCandidate)
+                    and isinstance(result.target_candidate, FreeSpaceCandidate)
+                ):
+                    problem_list = to_free_problems
+                elif (
+                    len(from_free_problems) < how_many // 2
+                    and isinstance(result.start_candidate, FreeSpaceCandidate)
+                    and isinstance(result.target_candidate, TaskOrientedCandidate)
+                ):
+                    problem_list = from_free_problems
+                else:
+                    continue
+
+                if expert_pipeline == "both":
+                    plan, _ = solve_global_plan(
+                        result.start_candidate,
+                        result.target_candidate,
+                        result.cuboids + result.cylinders,
+                        selfcc,
+                    )
+                    if len(plan) == 0:
+                        continue
+
+                if hasattr(result.target_candidate, "support_volume"):
+                    target_volume = result.target_candidate.support_volume
+                else:
+                    target_volume = Cuboid(
+                        center=result.target_candidate.pose.xyz,
+                        dims=[0.05, 0.05, 0.05],
+                        quaternion=result.target_candidate.pose.so3.wxyz,
+                    )
+                problem_list.append(
+                    PlanningProblem(
+                        target=result.target_candidate.pose,
+                        q0=result.start_candidate.config,
+                        obstacles=result.cuboids + result.cylinders,
+                        target_volume=target_volume,
+                        target_negative_volumes=result.target_candidate.negative_volumes,
+                    )
+                )
+                pbar.update(1)
+                break
+    with open(save_path, "wb") as f:
+        pickle.dump(
+            {
+                ENV_TYPE: {
+                    "free_start": from_free_problems,
+                    "free_goal": to_free_problems,
+                }
+            },
+            f,
+        )
+
+
 def generate_task_oriented_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
 ):
@@ -932,7 +1093,7 @@ def generate_neutral_inference_data(
 
 def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str):
     """
-    Generates a file with inference data for a given scene type. If the problems are neutral
+    Generates a file with inference data for a given scene type. If the problems are mixed
     (as specified by the global variable), then this will generate an even number of problems.
 
     Note that the sub-methods here are not the most efficient. For example, they generate two paths
@@ -948,10 +1109,18 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
         not Path(save_path).resolve().exists()
     ), "Cannot save inference data to a file that already exists"
 
-    if IS_NEUTRAL:
+    if prob_type == "mixed":
+        generate_mixed_inference_data(expert_pipeline, how_many, save_path)
+    elif prob_type == "task-oriented":
+        generate_task_oriented_inference_data(expert_pipeline, how_many, save_path)
+    elif prob_type == "free-space":
+        generate_free_space_inference_data(expert_pipeline, how_many, save_path)
+    elif prob_type == "neutral":
         generate_neutral_inference_data(expert_pipeline, how_many, save_path)
     else:
-        generate_task_oriented_inference_data(expert_pipeline, how_many, save_path)
+        raise NotImplementedError(
+            f"Prob type {prob_type} not implemented for inference data generation"
+        )
 
 
 if __name__ == "__main__":
@@ -975,17 +1144,16 @@ if __name__ == "__main__":
             "cubby",
             "merged-cubby",
             "dresser",
+            "free",
+            "pillar"
         ],
         help="Include this argument if there are subtypes",
     )
 
     parser.add_argument(
-        "--neutral",
-        action="store_true",
-        help=(
-            "If set, plans will always begin or end with a collision-free neutral pose."
-            " If not set, plans will always start and end with a task-oriented pose"
-        ),
+        "prob_type",
+        choices=["mixed", "task-oriented", "free-space", "neutral"],
+        help="Type of planning problem to generate"
     )
 
     parser.add_argument(
@@ -1057,9 +1225,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Used to tell all the various subprocesses whether to use neutral poses
-    global IS_NEUTRAL
-    IS_NEUTRAL = args.neutral
+    # Used to tell all the various subprocesses whether to use free space poses
+    global prob_type
+    prob_type = args.prob_type
 
     global FABRIC_URDF_PATH
     FABRIC_URDF_PATH = args.fabric_urdf
@@ -1105,5 +1273,5 @@ if __name__ == "__main__":
         print(f"Temporary data will save to {TMP_DATA_DIR}")
         print("Using args:")
         print(f"    (env_type: {args.env_type})")
-        print(f"    (neutral: {args.neutral})")
+        print(f"    (prob_type: {args.prob_type})")
         gen()
