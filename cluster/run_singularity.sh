@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # --- Hardcoded Paths ---
-CONTAINER_IMAGE="/cluster/scratch/yixili/learn_to_reach"
+CONTAINER_IMAGE="/cluster/scratch/yixili/learn_to_reach.sif"
 PIPELINE_DIR="/cluster/home/yixili/data_pipeline"
 RAW_DIR="/cluster/home/yixili/raw_data"
 SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
