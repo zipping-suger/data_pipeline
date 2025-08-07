@@ -17,7 +17,7 @@ mkdir -p /cluster/scratch/yixili/tmp
 cat <<EOT > job.sh
 #!/bin/bash
 #SBATCH -n 1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=96
 #SBATCH --tmp=30G             # Request 30GB in /tmp (if needed)
 #SBATCH --time=23:00:00
 #SBATCH --mem-per-cpu=4048
