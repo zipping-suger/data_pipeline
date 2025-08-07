@@ -76,15 +76,6 @@ class TabletopEnvironment(Environment):
     def _gen_free_space_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker
     ) -> List[FreeSpaceCandidate]:
-        """
-        Generates a set of free space candidates by first sampling poses in a specified range
-        and then solving for collision-free IK solutions.
-
-        :param how_many int: How many to generate ideally--can be less if there are a lot of failures
-        :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
-                                                mimic the internal Franka collision checker.
-        :rtype List[FreeSpaceCandidate]: A list of free space candidates
-        """
         sim = Bullet(gui=False)
         gripper = sim.load_robot(FrankaGripper)
         arm = sim.load_robot(FrankaRobot)
@@ -102,6 +93,11 @@ class TabletopEnvironment(Environment):
             "pitch": (-np.pi / 2, np.pi / 2),
             "yaw": (-np.pi, np.pi),
         }
+
+        # Use table surfaces as negative volumes
+        negative_volumes = []
+        for table in self.tables + self.clear_tables:
+            negative_volumes.append(table)
 
         while len(candidates) < how_many:
             # Generate random pose within specified ranges
@@ -126,14 +122,13 @@ class TabletopEnvironment(Environment):
             if q is not None:
                 arm.marionette(q)
                 if not (
-                    sim.in_collision(arm, check_self=True)
-                    or selfcc.has_self_collision(q)
+                    sim.in_collision(arm, check_self=True) or selfcc.has_self_collision(q)
                 ):
                     candidates.append(
                         FreeSpaceCandidate(
                             config=q,
                             pose=pose,
-                            negative_volumes=self.cubby.support_volumes,
+                            negative_volumes=negative_volumes,
                         )
                     )
         return candidates

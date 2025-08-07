@@ -12,7 +12,9 @@ RAW_DIR="/cluster/home/yixili/raw_data"
 SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
 # --- Environment and Task Definitions ---
-ENVS=("cubby" "dresser" "tabletop")
+# ENVS=("cubby" "dresser" "tabletop")
+ENVS = ("tabletop")
+
 declare -A TASKS=(
   [task-oriented]=task
   [neutral]=neutral
