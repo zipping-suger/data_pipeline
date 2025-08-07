@@ -94,11 +94,6 @@ class TabletopEnvironment(Environment):
             "yaw": (-np.pi, np.pi),
         }
 
-        # Use table surfaces as negative volumes
-        negative_volumes = []
-        for table in self.tables + self.clear_tables:
-            negative_volumes.append(table)
-
         while len(candidates) < how_many:
             # Generate random pose within specified ranges
             x = np.random.uniform(*position_ranges["x"])
@@ -128,7 +123,7 @@ class TabletopEnvironment(Environment):
                         FreeSpaceCandidate(
                             config=q,
                             pose=pose,
-                            negative_volumes=negative_volumes,
+                            negative_volumes=[],
                         )
                     )
         return candidates
