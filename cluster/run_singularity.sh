@@ -13,7 +13,7 @@ SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
 # --- Environment and Task Definitions ---
 # ENVS=("cubby" "dresser" "tabletop")
-ENVS = ("tabletop")
+ENVS=("tabletop")
 
 declare -A TASKS=(
   [task-oriented]=task
