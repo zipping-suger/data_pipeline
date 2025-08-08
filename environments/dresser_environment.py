@@ -529,14 +529,6 @@ class DresserEnvironment(Environment):
             "yaw": (-np.pi, np.pi),
         }
 
-        # Use demo candidates' support volumes as negative volumes if they exist
-        negative_volumes = []
-        if hasattr(self, "demo_candidates") and len(self.demo_candidates) >= 2:
-            negative_volumes = [
-                self.demo_candidates[0].support_volume,
-                self.demo_candidates[1].support_volume,
-            ]
-
         while len(candidates) < how_many:
             # Generate random pose within specified ranges
             x = np.random.uniform(*position_ranges["x"])
@@ -556,7 +548,7 @@ class DresserEnvironment(Environment):
                 continue
 
             # Solve IK
-            q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=5)
+            q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=50)
             if q is not None:
                 arm.marionette(q)
                 if not (
@@ -566,7 +558,7 @@ class DresserEnvironment(Environment):
                         FreeSpaceCandidate(
                             config=q,
                             pose=pose,
-                            negative_volumes=negative_volumes,
+                            negative_volumes=[],
                         )
                     )
         return candidates

@@ -13,13 +13,13 @@ SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
 # --- Environment and Task Definitions ---
 # ENVS=("cubby" "dresser" "tabletop")
-ENVS=("cubby" "dresser")
+ENVS=("dresser")
 
 declare -A TASKS=(
   [task-oriented]=task
   [neutral]=neutral
-  [free-space]=free
-  [mixed]=mixed
+  # [free-space]=free
+  # [mixed]=mixed
 )
 
 # --- Ensure Scratch TMP Exists ---
