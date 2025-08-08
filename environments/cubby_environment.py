@@ -563,7 +563,7 @@ class CubbyEnvironment(Environment):
 
         # Define the sampling ranges for pose generation (similar to free_environment)
         position_ranges = {
-            "x": (0, 1),  # meters from robot base
+            "x": (0.2, 1),  # meters from robot base
             "y": (-0.8, 0.8),  # meters from robot base
             "z": (-0.1, 1),  # meters from floor
         }
