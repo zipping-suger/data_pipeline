@@ -44,6 +44,7 @@ from data_pipeline.environments.free_environment import (
     FreeSpaceEnvironment
 )
 
+from prob_types import PlanningProblem
 
 from typing import Tuple, List, Union, Sequence, Optional, Any
 
