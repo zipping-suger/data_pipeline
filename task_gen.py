@@ -52,8 +52,8 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 100
-NUM_PLANS_PER_SCENE = 50
+NUM_SCENES = 40
+NUM_PLANS_PER_SCENE = 18
 PIPELINE_TIMEOUT = 36000  # 10 hours
 
 
