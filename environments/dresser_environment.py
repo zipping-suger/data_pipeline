@@ -7,6 +7,7 @@ import yourdfpy
 import trimesh.transformations as tra
 import trimesh
 import numpy as np
+import gc
 
 from pyquaternion import Quaternion
 
