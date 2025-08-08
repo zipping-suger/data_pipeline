@@ -18,8 +18,8 @@ ENVS=("dresser")
 declare -A TASKS=(
   [task-oriented]=task
   [neutral]=neutral
-  # [free-space]=free
-  # [mixed]=mixed
+  [free-space]=free
+  [mixed]=mixed
 )
 
 # --- Ensure Scratch TMP Exists ---
