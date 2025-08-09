@@ -2,9 +2,6 @@ import os
 import gc
 import sys
 import signal
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import time
 import argparse
 import uuid
@@ -54,7 +51,7 @@ CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
 NUM_SCENES = 1200
 NUM_PLANS_PER_SCENE = 98
-PIPELINE_TIMEOUT = 36000  # 10 hours
+PIPELINE_TIMEOUT = 60  # 10 hours
 
 
 @dataclass
@@ -205,8 +202,6 @@ def gen_single_env(_: Any):
     """
     Generate and save problems for a single environment
     """
-    if time.time() - START_TIME > PIPELINE_TIMEOUT:
-        return
     np.random.seed()
     random.seed()
     env, problems = gen_single_env_data()
@@ -264,7 +259,6 @@ def gen_single_env(_: Any):
     gc.collect()
 
 
-# NEW FUNCTION
 def merge_and_cleanup():
     """
     Merges temporary HDF5 files into a single HDF5 file and cleans up.
@@ -424,6 +418,48 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
         pickle.dump({ENV_TYPE: {prob_type: inference_problems}}, f)
 
 
+# NEW CODE: Signal handler and main execution with timeout
+def signal_handler(signum, frame):
+    """
+    Signal handler for SIGALRM. Raises an exception to be caught in the main thread.
+    """
+    raise SystemExit(1)
+
+
+def run_with_timeout(timeout: int):
+    """
+    Runs the data generation pipeline with a specified timeout.
+    """
+    noOutputHandler()
+    non_seeds = np.arange(NUM_SCENES)
+
+    # Set up the signal handler
+    signal.signal(signal.SIGALRM, signal_handler)
+    signal.alarm(timeout)  # Set the alarm
+
+    print(f"Starting data generation with a timeout of {timeout} seconds.")
+
+    try:
+        with Pool() as pool:
+            for _ in tqdm(
+                pool.imap_unordered(gen_single_env, non_seeds),
+                total=NUM_SCENES,
+            ):
+                pass
+    except (SystemExit, KeyboardInterrupt):
+        print("\nTimeout or KeyboardInterrupt received. Terminating pool...")
+        # Since the pool is a context manager, it should be cleaned up automatically.
+        # Explicitly terminating it is a good practice if it's not a context manager.
+        # In this case, the `with` statement will handle it.
+        pass
+    finally:
+        # Cancel the alarm to prevent it from triggering after cleanup
+        signal.alarm(0)
+        print("Merging collected data...")
+        merge_and_cleanup()
+        sys.exit(0)
+
+
 if __name__ == "__main__":
     global START_TIME
     START_TIME = time.time()
@@ -446,6 +482,12 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="run_type")
     run_full = subparsers.add_parser("full-pipeline")
     run_full.add_argument("data_dir", type=str, help="Output directory")
+    run_full.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Pipeline timeout in seconds. 0 for no timeout.",
+    )
 
     test_pipeline = subparsers.add_parser("test-pipeline")
     test_pipeline.add_argument("data_dir", type=str, help="Output directory")
@@ -485,4 +527,9 @@ if __name__ == "__main__":
         print(f"Final data will be saved to {FINAL_DATA_DIR}")
         print(f"Temporary data in {TMP_DATA_DIR}")
         print(f"Environment: {args.env_type}, Problem type: {args.prob_type}")
-        gen()
+
+        # Check for timeout argument and run the appropriate function
+        if args.run_type == "full-pipeline" and args.timeout > 0:
+            run_with_timeout(args.timeout)
+        else:
+            gen()
