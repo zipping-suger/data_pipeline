@@ -17,7 +17,7 @@ ENVS=("dresser")
 
 declare -A TASKS=(
   [task-oriented]=task
-  [neutral]=neutral
+  # [neutral]=neutral
   # [free-space]=free
   # [mixed]=mixed
 )
