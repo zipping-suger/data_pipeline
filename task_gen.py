@@ -1,6 +1,7 @@
 import os
 import gc
 import sys
+import signal
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -41,9 +42,7 @@ from data_pipeline.environments.dresser_environment import (
 from data_pipeline.environments.tabletop_environment import (
     TabletopEnvironment,
 )
-from data_pipeline.environments.free_environment import (
-    FreeSpaceEnvironment
-)
+from data_pipeline.environments.free_environment import FreeSpaceEnvironment
 
 from prob_types import PlanningProblem
 
@@ -53,7 +52,7 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 1000
+NUM_SCENES = 1200
 NUM_PLANS_PER_SCENE = 98
 PIPELINE_TIMEOUT = 36000  # 10 hours
 
@@ -63,6 +62,7 @@ class Problem:
     """
     Represents a planning problem without trajectory
     """
+
     start_candidate: Candidate
     target_candidate: Candidate
     cuboids: List[Cuboid] = field(default_factory=list)
@@ -85,51 +85,72 @@ def generate_candidate_pairs(
         free_space_candidates = env._gen_free_space_candidates(n, selfcc)
         random.shuffle(candidates[0])
         random.shuffle(candidates[1])
-        nonfree_space_candidates = candidates[0][:n//2] + candidates[1][:n//2] if n > 1 else candidates[0][:1]
-        
-        for c1, c2 in itertools.product(free_space_candidates, nonfree_space_candidates):
-            problems.append(Problem(
-                start_candidate=c1,
-                target_candidate=c2,
-                cuboids=env.cuboids,
-                cylinders=env.cylinders
-            ))
+        nonfree_space_candidates = (
+            candidates[0][: n // 2] + candidates[1][: n // 2]
+            if n > 1
+            else candidates[0][:1]
+        )
+
+        for c1, c2 in itertools.product(
+            free_space_candidates, nonfree_space_candidates
+        ):
+            problems.append(
+                Problem(
+                    start_candidate=c1,
+                    target_candidate=c2,
+                    cuboids=env.cuboids,
+                    cylinders=env.cylinders,
+                )
+            )
     elif prob_type == "task-oriented":
         for c1, c2 in itertools.product(candidates[0], candidates[1]):
-            problems.append(Problem(
-                start_candidate=c1,
-                target_candidate=c2,
-                cuboids=env.cuboids,
-                cylinders=env.cylinders
-            ))
+            problems.append(
+                Problem(
+                    start_candidate=c1,
+                    target_candidate=c2,
+                    cuboids=env.cuboids,
+                    cylinders=env.cylinders,
+                )
+            )
     elif prob_type == "free-space":
         free_space_candidates_1 = env._gen_free_space_candidates(n, selfcc)
         free_space_candidates_2 = env._gen_free_space_candidates(n, selfcc)
-        for c1, c2 in itertools.product(free_space_candidates_1, free_space_candidates_2):
-            problems.append(Problem(
-                start_candidate=c1,
-                target_candidate=c2,
-                cuboids=env.cuboids,
-                cylinders=env.cylinders
-            ))
+        for c1, c2 in itertools.product(
+            free_space_candidates_1, free_space_candidates_2
+        ):
+            problems.append(
+                Problem(
+                    start_candidate=c1,
+                    target_candidate=c2,
+                    cuboids=env.cuboids,
+                    cylinders=env.cylinders,
+                )
+            )
     elif prob_type == "neutral":  # ADD NEUTRAL BRANCH
         neutral_candidates = env.gen_neutral_candidates(n, selfcc)
         random.shuffle(candidates[0])
         random.shuffle(candidates[1])
-        nonneutral_candidates = candidates[0][:n//2] + candidates[1][:n//2] if n > 1 else candidates[0][:1]
-        
+        nonneutral_candidates = (
+            candidates[0][: n // 2] + candidates[1][: n // 2]
+            if n > 1
+            else candidates[0][:1]
+        )
+
         for c1, c2 in itertools.product(neutral_candidates, nonneutral_candidates):
-            problems.append(Problem(
-                start_candidate=c1,
-                target_candidate=c2,
-                cuboids=env.cuboids,
-                cylinders=env.cylinders
-            ))
+            problems.append(
+                Problem(
+                    start_candidate=c1,
+                    target_candidate=c2,
+                    cuboids=env.cuboids,
+                    cylinders=env.cylinders,
+                )
+            )
     else:
         raise NotImplementedError(
             f"Prob type {prob_type} not implemented for environment generation"
         )
     return problems
+
 
 def verify_has_solvable_problems(
     env: Environment, selfcc: FrankaSelfCollisionChecker
@@ -139,6 +160,7 @@ def verify_has_solvable_problems(
     """
     # Simplified check - just validate environment generation
     return True
+
 
 def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
     """
@@ -158,7 +180,7 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = FreeSpaceEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
-    
+
     success = False
     while not success:
         success = (
@@ -167,6 +189,7 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
             and len(env.cylinders) < CYLINDER_CUTOFF
         )
     return env
+
 
 def gen_single_env_data() -> Tuple[Environment, List[Problem]]:
     """
@@ -241,27 +264,21 @@ def gen_single_env(_: Any):
     gc.collect()
 
 
-def gen():
+# NEW FUNCTION
+def merge_and_cleanup():
     """
-    Main generation function with multiprocessing
+    Merges temporary HDF5 files into a single HDF5 file and cleans up.
     """
-    noOutputHandler()
-    non_seeds = np.arange(NUM_SCENES)
-
-    with Pool() as pool:  # You can try processes=os.cpu_count() // 2 or other values
-        for _ in tqdm(
-            pool.imap_unordered(gen_single_env, non_seeds),
-            total=NUM_SCENES,
-        ):
-            pass
-
-    # Merge all temporary files
     all_files = list(Path(TMP_DATA_DIR).glob("*.hdf5"))
+    if not all_files:
+        print("No temporary files found to merge.")
+        return
+
     max_cylinders = 0
     max_cuboids = 0
     total_problems = 0
     for fi in all_files:
-        with h5py.File(fi) as f:
+        with h5py.File(fi, "r") as f:
             total_problems += len(f["start_configs"])
             num_cuboids = len(f["cuboid_dims"])
             num_cylinders = len(f["cylinder_radii"])
@@ -328,9 +345,35 @@ def gen():
 
                 chunk_start = chunk_end
 
-    # Clean up temporary files
-    for fi in all_files:
-        fi.unlink()
+            # Clean up temporary file after it has been merged
+            fi.unlink()
+
+
+def gen():
+    """
+    Main generation function with multiprocessing
+    """
+    noOutputHandler()
+    non_seeds = np.arange(NUM_SCENES)
+
+    with Pool() as pool:
+        try:
+            for _ in tqdm(
+                pool.imap_unordered(gen_single_env, non_seeds),
+                total=NUM_SCENES,
+            ):
+                pass
+        except KeyboardInterrupt:
+            print("Received KeyboardInterrupt. Terminating pool...")
+            pool.terminate()
+            pool.join()
+            print("Pool terminated. Merging collected data...")
+            merge_and_cleanup()
+            sys.exit(0)
+
+    # Normal completion
+    print("Generation complete. Merging collected data...")
+    merge_and_cleanup()
 
 
 def visualize_single_env():
@@ -340,19 +383,20 @@ def visualize_single_env():
     # Implementation remains the same as original
     pass
 
+
 def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str):
     """
     Generate inference data (simplified to only collect problems)
     """
     selfcc = FrankaSelfCollisionChecker()
     inference_problems = []
-    
+
     with tqdm(total=how_many) as pbar:
         while len(inference_problems) < how_many:
             env, problems = gen_single_env_data()
             if len(problems) == 0:
                 continue
-                
+
             for problem in problems:
                 if hasattr(problem.target_candidate, "support_volume"):
                     target_volume = problem.target_candidate.support_volume
@@ -362,7 +406,7 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
                         dims=[0.05, 0.05, 0.05],
                         quaternion=problem.target_candidate.pose.so3.wxyz,
                     )
-                    
+
                 inference_problems.append(
                     PlanningProblem(
                         target=problem.target_candidate.pose,
@@ -378,7 +422,7 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
 
     with open(save_path, "wb") as f:
         pickle.dump({ENV_TYPE: {prob_type: inference_problems}}, f)
-        
+
 
 if __name__ == "__main__":
     global START_TIME
@@ -398,16 +442,16 @@ if __name__ == "__main__":
         choices=["mixed", "task-oriented", "free-space", "neutral"],
         help="Problem type",
     )
-        
+
     subparsers = parser.add_subparsers(dest="run_type")
     run_full = subparsers.add_parser("full-pipeline")
     run_full.add_argument("data_dir", type=str, help="Output directory")
-    
+
     test_pipeline = subparsers.add_parser("test-pipeline")
     test_pipeline.add_argument("data_dir", type=str, help="Output directory")
-    
+
     test_pipeline = subparsers.add_parser("test-environment")
-    
+
     gen_inference = subparsers.add_parser("for-inference")
     gen_inference.add_argument("expert", choices=["global"])
     gen_inference.add_argument("how_many", type=int)
@@ -433,7 +477,7 @@ if __name__ == "__main__":
         global TMP_DATA_DIR
         TMP_DATA_DIR = f"/tmp/tmp_data_{uuid.uuid4()}/"
         os.makedirs(TMP_DATA_DIR, exist_ok=True)
-        
+
         global FINAL_DATA_DIR
         FINAL_DATA_DIR = args.data_dir
         os.makedirs(FINAL_DATA_DIR, exist_ok=True)
