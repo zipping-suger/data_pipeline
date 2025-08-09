@@ -1,4 +1,5 @@
 import os
+import gc
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,8 +53,8 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 12250
-NUM_PLANS_PER_SCENE = 8
+NUM_SCENES = 1000
+NUM_PLANS_PER_SCENE = 98
 PIPELINE_TIMEOUT = 36000  # 10 hours
 
 
@@ -176,6 +177,7 @@ def gen_single_env_data() -> Tuple[Environment, List[Problem]]:
     problems = generate_candidate_pairs(env, NUM_PLANS_PER_SCENE, selfcc)
     return env, problems
 
+
 def gen_single_env(_: Any):
     """
     Generate and save problems for a single environment
@@ -188,31 +190,36 @@ def gen_single_env(_: Any):
 
     n = len(problems)
     file_name = f"{TMP_DATA_DIR}/{uuid.uuid4()}.hdf5"
+
+    # Determine number of cuboids/cylinders *before* writing problems
+    num_cuboids = len(env.cuboids)
+    num_cylinders = len(env.cylinders)
+
     with h5py.File(file_name, "w-") as f:
         # Create datasets
         start_configs = f.create_dataset("start_configs", (n, 7))
         target_configs = f.create_dataset("target_configs", (n, 7))
         start_poses = f.create_dataset("start_poses", (n, 7))  # xyz + quaternion (wxyz)
         target_poses = f.create_dataset("target_poses", (n, 7))
-        
-        cuboid_dims = f.create_dataset("cuboid_dims", (len(env.cuboids), 3))
-        cuboid_centers = f.create_dataset("cuboid_centers", (len(env.cuboids), 3))
-        cuboid_quats = f.create_dataset("cuboid_quaternions", (len(env.cuboids), 4))
 
-        cylinder_radii = f.create_dataset("cylinder_radii", (len(env.cylinders), 1))
-        cylinder_heights = f.create_dataset("cylinder_heights", (len(env.cylinders), 1))
-        cylinder_centers = f.create_dataset("cylinder_centers", (len(env.cylinders), 3))
-        cylinder_quats = f.create_dataset("cylinder_quaternions", (len(env.cylinders), 4))
+        cuboid_dims = f.create_dataset("cuboid_dims", (num_cuboids, 3))
+        cuboid_centers = f.create_dataset("cuboid_centers", (num_cuboids, 3))
+        cuboid_quats = f.create_dataset("cuboid_quaternions", (num_cuboids, 4))
+
+        cylinder_radii = f.create_dataset("cylinder_radii", (num_cylinders, 1))
+        cylinder_heights = f.create_dataset("cylinder_heights", (num_cylinders, 1))
+        cylinder_centers = f.create_dataset("cylinder_centers", (num_cylinders, 3))
+        cylinder_quats = f.create_dataset("cylinder_quaternions", (num_cylinders, 4))
 
         # Save problems
         for i, problem in enumerate(problems):
             start_configs[i] = problem.start_candidate.config
             target_configs[i] = problem.target_candidate.config
-            
+
             # Start pose (xyz + quaternion wxyz)
             start_poses[i, 0:3] = problem.start_candidate.pose.xyz
             start_poses[i, 3:7] = problem.start_candidate.pose.so3.wxyz
-            
+
             # Target pose (xyz + quaternion wxyz)
             target_poses[i, 0:3] = problem.target_candidate.pose.xyz
             target_poses[i, 3:7] = problem.target_candidate.pose.so3.wxyz
@@ -222,12 +229,17 @@ def gen_single_env(_: Any):
             cuboid_dims[j] = cuboid.dims
             cuboid_centers[j] = cuboid.pose.xyz
             cuboid_quats[j] = cuboid.pose.so3.wxyz
-            
+
         for k, cylinder in enumerate(env.cylinders):
             cylinder_radii[k] = cylinder.radius
             cylinder_heights[k] = cylinder.height
             cylinder_centers[k] = cylinder.pose.xyz
             cylinder_quats[k] = cylinder.pose.so3.wxyz
+
+    del env
+    del problems
+    gc.collect()
+
 
 def gen():
     """
@@ -236,7 +248,7 @@ def gen():
     noOutputHandler()
     non_seeds = np.arange(NUM_SCENES)
 
-    with Pool() as pool:
+    with Pool() as pool:  # You can try processes=os.cpu_count() // 2 or other values
         for _ in tqdm(
             pool.imap_unordered(gen_single_env, non_seeds),
             total=NUM_SCENES,
@@ -264,49 +276,62 @@ def gen():
         target_configs = f.create_dataset("target_configs", (total_problems, 7))
         start_poses = f.create_dataset("start_poses", (total_problems, 7))
         target_poses = f.create_dataset("target_poses", (total_problems, 7))
-        
+
         # Obstacle datasets
         cuboid_dims = f.create_dataset("cuboid_dims", (total_problems, max_cuboids, 3))
-        cuboid_centers = f.create_dataset("cuboid_centers", (total_problems, max_cuboids, 3))
-        cuboid_quats = f.create_dataset("cuboid_quaternions", (total_problems, max_cuboids, 4))
-        cylinder_radii = f.create_dataset("cylinder_radii", (total_problems, max_cylinders, 1))
-        cylinder_heights = f.create_dataset("cylinder_heights", (total_problems, max_cylinders, 1))
-        cylinder_centers = f.create_dataset("cylinder_centers", (total_problems, max_cylinders, 3))
-        cylinder_quats = f.create_dataset("cylinder_quaternions", (total_problems, max_cylinders, 4))
+        cuboid_centers = f.create_dataset(
+            "cuboid_centers", (total_problems, max_cuboids, 3)
+        )
+        cuboid_quats = f.create_dataset(
+            "cuboid_quaternions", (total_problems, max_cuboids, 4)
+        )
+        cylinder_radii = f.create_dataset(
+            "cylinder_radii", (total_problems, max_cylinders, 1)
+        )
+        cylinder_heights = f.create_dataset(
+            "cylinder_heights", (total_problems, max_cylinders, 1)
+        )
+        cylinder_centers = f.create_dataset(
+            "cylinder_centers", (total_problems, max_cylinders, 3)
+        )
+        cylinder_quats = f.create_dataset(
+            "cylinder_quaternions", (total_problems, max_cylinders, 4)
+        )
 
         chunk_start = 0
         for fi in all_files:
             with h5py.File(fi, "r") as g:
                 n = len(g["start_configs"])
                 chunk_end = chunk_start + n
-                
+
                 # Copy problem data
                 start_configs[chunk_start:chunk_end] = g["start_configs"][...]
                 target_configs[chunk_start:chunk_end] = g["target_configs"][...]
                 start_poses[chunk_start:chunk_end] = g["start_poses"][...]
                 target_poses[chunk_start:chunk_end] = g["target_poses"][...]
-                
+
                 # Copy and pad obstacles
                 num_cuboids = len(g["cuboid_dims"])
                 num_cylinders = len(g["cylinder_radii"])
-                
+
                 for idx in range(chunk_start, chunk_end):
                     # Cuboids
                     cuboid_dims[idx, :num_cuboids] = g["cuboid_dims"][...]
                     cuboid_centers[idx, :num_cuboids] = g["cuboid_centers"][...]
                     cuboid_quats[idx, :num_cuboids] = g["cuboid_quaternions"][...]
-                    
+
                     # Cylinders
                     cylinder_radii[idx, :num_cylinders] = g["cylinder_radii"][...]
                     cylinder_heights[idx, :num_cylinders] = g["cylinder_heights"][...]
                     cylinder_centers[idx, :num_cylinders] = g["cylinder_centers"][...]
                     cylinder_quats[idx, :num_cylinders] = g["cylinder_quaternions"][...]
-                
+
                 chunk_start = chunk_end
-                
+
     # Clean up temporary files
     for fi in all_files:
         fi.unlink()
+
 
 def visualize_single_env():
     """
@@ -353,6 +378,7 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
 
     with open(save_path, "wb") as f:
         pickle.dump({ENV_TYPE: {prob_type: inference_problems}}, f)
+        
 
 if __name__ == "__main__":
     global START_TIME
