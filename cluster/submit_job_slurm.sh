@@ -20,7 +20,7 @@ cat <<EOT > job.sh
 #SBATCH --cpus-per-task=32
 #SBATCH --tmp=40G             # Request 40GB in /tmp (if needed)
 #SBATCH --time=23:00:00
-#SBATCH --mem-per-cpu=8096
+#SBATCH --mem-per-cpu=4096
 #SBATCH --output=$logfile
 #SBATCH --mail-type=END
 #SBATCH --mail-user=name@mail
