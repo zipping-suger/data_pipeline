@@ -280,12 +280,15 @@ def gen():
             total=NUM_SCENES,
         )
         for _ in pbar:
-            if time.time() - START_TIME > TIME_OUT:
+            if time.time() - START_TIME > timeout:
                 print(
-                    f"Timeout of {TIME_OUT}s reached. Stopping generation and starting merge."
+                    f"Timeout of {timeout}s reached. Stopping generation and starting merge."
                 )
-                pool.terminate()  # Terminate the pool to stop all workers
+                pool.close()  # Close the pool to prevent new tasks
                 break
+
+        pbar.close()
+        pool.join()  # Wait for all current tasks to finish
 
     # Merge all temporary files
     all_files = list(Path(TMP_DATA_DIR).glob("*.hdf5"))
