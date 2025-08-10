@@ -52,7 +52,7 @@ CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
 NUM_SCENES = 1200
 NUM_PLANS_PER_SCENE = 98
-PIPELINE_TIMEOUT = 60  # 10 hours
+PIPELINE_TIMEOUT = 36000  # 10 hours
 
 
 @dataclass
@@ -486,7 +486,7 @@ if __name__ == "__main__":
     run_full.add_argument(
         "--timeout",
         type=int,
-        default=3600,
+        default=60,
         help="Pipeline timeout in seconds. 0 for no timeout.",
     )
 
