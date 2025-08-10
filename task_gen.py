@@ -487,7 +487,7 @@ if __name__ == "__main__":
     run_full.add_argument(
         "--timeout",
         type=int,
-        default=1200,
+        default=2200,
         help="Pipeline timeout in seconds. 0 for no timeout.",
     )
 
