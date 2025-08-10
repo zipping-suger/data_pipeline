@@ -18,13 +18,18 @@ cat <<EOT > job.sh
 #!/bin/bash
 #SBATCH -n 1
 #SBATCH --cpus-per-task=96
-#SBATCH --tmp=30G             # Request 40GB in /tmp (if needed)
+#SBATCH --tmp=30G
 #SBATCH --time=23:00:00
 #SBATCH --mem-per-cpu=4096
 #SBATCH --output=$logfile
 #SBATCH --mail-type=END
 #SBATCH --mail-user=name@mail
 #SBATCH --job-name="training-${timestamp}"
+
+# Set thread limits
+export OPENBLAS_NUM_THREADS=8
+export OMP_NUM_THREADS=8
+export MKL_NUM_THREADS=8
 
 # Use a custom TMPDIR in scratch (safer than /tmp)
 export TMPDIR=/cluster/scratch/yixili/tmp
