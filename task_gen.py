@@ -1,8 +1,9 @@
 import os
 import gc
 import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import signal
+
 import time
 import argparse
 import uuid
@@ -53,6 +54,7 @@ CYLINDER_CUTOFF = 40
 NUM_SCENES = 1200
 NUM_PLANS_PER_SCENE = 98
 PIPELINE_TIMEOUT = 36000  # 10 hours
+TIME_OUT = 600  # For the whole process
 
 
 @dataclass
@@ -203,6 +205,8 @@ def gen_single_env(_: Any):
     """
     Generate and save problems for a single environment
     """
+    if time.time() - START_TIME > PIPELINE_TIMEOUT:
+        return
     np.random.seed()
     random.seed()
     env, problems = gen_single_env_data()
@@ -260,20 +264,36 @@ def gen_single_env(_: Any):
     gc.collect()
 
 
-def merge_and_cleanup():
+def gen():
     """
-    Merges temporary HDF5 files into a single HDF5 file and cleans up.
+    Main generation function with multiprocessing
     """
-    all_files = list(Path(TMP_DATA_DIR).glob("*.hdf5"))
-    if not all_files:
-        print("No temporary files found to merge.")
-        return
+    noOutputHandler()
+    non_seeds = np.arange(NUM_SCENES)
 
+    global START_TIME
+    START_TIME = time.time()
+
+    with Pool() as pool:
+        pbar = tqdm(
+            pool.imap_unordered(gen_single_env, non_seeds),
+            total=NUM_SCENES,
+        )
+        for _ in pbar:
+            if time.time() - START_TIME > TIME_OUT:
+                print(
+                    f"Timeout of {TIME_OUT}s reached. Stopping generation and starting merge."
+                )
+                break
+        pbar.close()
+
+    # Merge all temporary files
+    all_files = list(Path(TMP_DATA_DIR).glob("*.hdf5"))
     max_cylinders = 0
     max_cuboids = 0
     total_problems = 0
     for fi in all_files:
-        with h5py.File(fi, "r") as f:
+        with h5py.File(fi) as f:
             total_problems += len(f["start_configs"])
             num_cuboids = len(f["cuboid_dims"])
             num_cylinders = len(f["cylinder_radii"])
@@ -340,35 +360,9 @@ def merge_and_cleanup():
 
                 chunk_start = chunk_end
 
-            # Clean up temporary file after it has been merged
-            fi.unlink()
-
-
-def gen():
-    """
-    Main generation function with multiprocessing
-    """
-    noOutputHandler()
-    non_seeds = np.arange(NUM_SCENES)
-
-    with Pool() as pool:
-        try:
-            for _ in tqdm(
-                pool.imap_unordered(gen_single_env, non_seeds),
-                total=NUM_SCENES,
-            ):
-                pass
-        except KeyboardInterrupt:
-            print("Received KeyboardInterrupt. Terminating pool...")
-            pool.terminate()
-            pool.join()
-            print("Pool terminated. Merging collected data...")
-            merge_and_cleanup()
-            sys.exit(0)
-
-    # Normal completion
-    print("Generation complete. Merging collected data...")
-    merge_and_cleanup()
+    # Clean up temporary files
+    for fi in all_files:
+        fi.unlink()
 
 
 def visualize_single_env():
@@ -419,48 +413,6 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
         pickle.dump({ENV_TYPE: {prob_type: inference_problems}}, f)
 
 
-# NEW CODE: Signal handler and main execution with timeout
-def signal_handler(signum, frame):
-    """
-    Signal handler for SIGALRM. Raises an exception to be caught in the main thread.
-    """
-    raise SystemExit(1)
-
-
-def run_with_timeout(timeout: int):
-    """
-    Runs the data generation pipeline with a specified timeout.
-    """
-    noOutputHandler()
-    non_seeds = np.arange(NUM_SCENES)
-
-    # Set up the signal handler
-    signal.signal(signal.SIGALRM, signal_handler)
-    signal.alarm(timeout)  # Set the alarm
-
-    print(f"Starting data generation with a timeout of {timeout} seconds.")
-
-    try:
-        with Pool() as pool:
-            for _ in tqdm(
-                pool.imap_unordered(gen_single_env, non_seeds),
-                total=NUM_SCENES,
-            ):
-                pass
-    except (SystemExit, KeyboardInterrupt):
-        print("\nTimeout or KeyboardInterrupt received. Terminating pool...")
-        # Since the pool is a context manager, it should be cleaned up automatically.
-        # Explicitly terminating it is a good practice if it's not a context manager.
-        # In this case, the `with` statement will handle it.
-        pass
-    finally:
-        # Cancel the alarm to prevent it from triggering after cleanup
-        signal.alarm(0)
-        print("Merging collected data...")
-        merge_and_cleanup()
-        sys.exit(0)
-
-
 if __name__ == "__main__":
     global START_TIME
     START_TIME = time.time()
@@ -483,12 +435,6 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="run_type")
     run_full = subparsers.add_parser("full-pipeline")
     run_full.add_argument("data_dir", type=str, help="Output directory")
-    run_full.add_argument(
-        "--timeout",
-        type=int,
-        default=60,
-        help="Pipeline timeout in seconds. 0 for no timeout.",
-    )
 
     test_pipeline = subparsers.add_parser("test-pipeline")
     test_pipeline.add_argument("data_dir", type=str, help="Output directory")
@@ -528,9 +474,4 @@ if __name__ == "__main__":
         print(f"Final data will be saved to {FINAL_DATA_DIR}")
         print(f"Temporary data in {TMP_DATA_DIR}")
         print(f"Environment: {args.env_type}, Problem type: {args.prob_type}")
-
-        # Check for timeout argument and run the appropriate function
-        if args.run_type == "full-pipeline" and args.timeout > 0:
-            run_with_timeout(args.timeout)
-        else:
-            gen()
+        gen()
