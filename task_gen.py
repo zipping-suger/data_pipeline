@@ -54,7 +54,7 @@ CYLINDER_CUTOFF = 40
 NUM_SCENES = 1200
 NUM_PLANS_PER_SCENE = 98
 PIPELINE_TIMEOUT = 36000  # 10 hours
-TIME_OUT = 600  # For the whole process
+TIME_OUT = 60  # For the whole process
 
 
 @dataclass
@@ -284,8 +284,8 @@ def gen():
                 print(
                     f"Timeout of {TIME_OUT}s reached. Stopping generation and starting merge."
                 )
+                pool.terminate()  # Terminate the pool to stop all workers
                 break
-        pbar.close()
 
     # Merge all temporary files
     all_files = list(Path(TMP_DATA_DIR).glob("*.hdf5"))
