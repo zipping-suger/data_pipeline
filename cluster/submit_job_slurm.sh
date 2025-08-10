@@ -17,7 +17,7 @@ mkdir -p /cluster/scratch/yixili/tmp
 cat <<EOT > job.sh
 #!/bin/bash
 #SBATCH -n 1
-#SBATCH --cpus-per-task=96
+#SBATCH --cpus-per-task=8  # Corrected from 96 to 8 to match the number of threads
 #SBATCH --tmp=30G
 #SBATCH --time=23:00:00
 #SBATCH --mem-per-cpu=4096
