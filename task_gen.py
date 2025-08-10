@@ -51,9 +51,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 1200
+NUM_SCENES = 2000
 NUM_PLANS_PER_SCENE = 98
-PIPELINE_TIMEOUT = 60  # 10 hours
+PIPELINE_TIMEOUT = 3600  # 10 hours
 
 
 @dataclass
@@ -448,8 +448,8 @@ def run_with_timeout(timeout: int):
                 total=NUM_SCENES,
             ):
                 pass
-    except (SystemExit, KeyboardInterrupt):
-        print("\nTimeout or KeyboardInterrupt received. Terminating pool...")
+    except (SystemExit, KeyboardInterrupt, Exception) as e:
+        print(f"\nTerminating due to {str(e)}")
         # Since the pool is a context manager, it should be cleaned up automatically.
         # Explicitly terminating it is a good practice if it's not a context manager.
         # In this case, the `with` statement will handle it.
@@ -487,7 +487,7 @@ if __name__ == "__main__":
     run_full.add_argument(
         "--timeout",
         type=int,
-        default=2200,
+        default=3600,
         help="Pipeline timeout in seconds. 0 for no timeout.",
     )
 
