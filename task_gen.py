@@ -280,9 +280,9 @@ def gen():
             total=NUM_SCENES,
         )
         for _ in pbar:
-            if time.time() - START_TIME > timeout:
+            if time.time() - START_TIME > TIME_OUT:
                 print(
-                    f"Timeout of {timeout}s reached. Stopping generation and starting merge."
+                    f"Timeout of {TIME_OUT}s reached. Stopping generation and starting merge."
                 )
                 pool.close()  # Close the pool to prevent new tasks
                 break
