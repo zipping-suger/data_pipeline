@@ -13,10 +13,10 @@ SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
 # --- Environment and Task Definitions ---
 # ENVS=("cubby" "dresser" "tabletop")
-ENVS=("dresser")
+ENVS=("cabinet")
 
 declare -A TASKS=(
-  # [task-oriented]=task
+  [task-oriented]=task
   [neutral]=neutral
   # [free-space]=free
   # [mixed]=mixed
@@ -56,7 +56,7 @@ for ENV in "${ENVS[@]}"; do
       --env ACCEPT_EULA=Y \
       --env TMPDIR="$SCRATCH_TMP" \
       "${CONTAINER_IMAGE}" \
-      /usr/bin/python3 -u /data_pipeline/task_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
+      /usr/bin/python3 -u /data_pipeline/ompl_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
 
     echo "=== Completed $ENV - $TYPE ==="
   done

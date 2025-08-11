@@ -56,6 +56,10 @@ from data_pipeline.environments.pillar_environment import (
     PillarEnvironment
 )
 
+from data_pipeline.environments.cabinet_environment import (
+    CabinetEnvironment
+)
+
 from prob_types import PlanningProblem
 
 from typing import Tuple, List, Union, Sequence, Optional, Any
@@ -64,9 +68,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 2  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 200  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    8  # The number of total candidate start or goals to use to plan experts
+    98  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 
@@ -433,6 +437,8 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = FreeSpaceEnvironment()
     elif ENV_TYPE == "pillar":
         env = PillarEnvironment()
+    elif ENV_TYPE == "cabinet":
+        env = CabinetEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
     success = False
@@ -458,8 +464,9 @@ def gen_single_env_data() -> Tuple[Environment, List[Result]]:
     # The physical Franka's internal collision checker is more conservative than Bullet's
     # This will allow for more realistic collision checks
     selfcc = FrankaSelfCollisionChecker()
-
+    
     env = gen_valid_env(selfcc)
+    # print(colored(f"Generated environment {ENV_TYPE}", "green"))
     results = exhaust_environment(env, NUM_PLANS_PER_SCENE, selfcc)
     return env, results
 
@@ -598,7 +605,9 @@ def gen():
 
 
 def visualize_single_env():
+    print(colored("Visualizing a single environment", "green"))
     env, results = gen_single_env_data()
+    print(f"Generated {len(results)} results in environment {ENV_TYPE}")
     if len(results) == 0:
         print("Found no results")
         return
@@ -920,6 +929,7 @@ if __name__ == "__main__":
             "free",
             "tabletop",
             "cubby",
+            "cabinet",
             "merged-cubby",
             "dresser",
         ],

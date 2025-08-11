@@ -41,7 +41,17 @@ from data_pipeline.environments.dresser_environment import (
 from data_pipeline.environments.tabletop_environment import (
     TabletopEnvironment,
 )
-from data_pipeline.environments.free_environment import FreeSpaceEnvironment
+from data_pipeline.environments.free_environment import (
+    FreeSpaceEnvironment
+)
+
+from data_pipeline.environments.cabinet_environment import (
+    CabinetEnvironment,
+)
+
+from data_pipeline.environments.pillar_environment import (
+    PillarEnvironment,
+)
 
 from prob_types import PlanningProblem
 
@@ -177,6 +187,10 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = DresserEnvironment()
     elif ENV_TYPE == "free":
         env = FreeSpaceEnvironment()
+    elif ENV_TYPE == "pillar":
+        env = PillarEnvironment()
+    elif ENV_TYPE == "cabinet":
+        env = CabinetEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
 
