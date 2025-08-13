@@ -61,7 +61,7 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 6000
+NUM_SCENES = 12000
 NUM_PLANS_PER_SCENE = 98
 PIPELINE_TIMEOUT = 3600  # 10 hours
 
@@ -501,7 +501,7 @@ if __name__ == "__main__":
     run_full.add_argument(
         "--timeout",
         type=int,
-        default=0,
+        default=7200,
         help="Pipeline timeout in seconds. 0 for no timeout.",
     )
 
