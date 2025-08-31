@@ -12,13 +12,13 @@ RAW_DIR="/cluster/home/yixili/raw_data"
 SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
 # --- Environment and Task Definitions ---
-ENVS=("dresser")
+ENVS=("cabinet")
 
 declare -A TASKS=(
   [task-oriented]=task
   [neutral]=neutral
-  [free-space]=free
-  [mixed]=mixed
+  # [free-space]=free
+  # [mixed]=mixed
 )
 
 # --- Ensure Scratch TMP Exists ---
@@ -55,7 +55,7 @@ for ENV in "${ENVS[@]}"; do
       --env ACCEPT_EULA=Y \
       --env TMPDIR="$SCRATCH_TMP" \
       "${CONTAINER_IMAGE}" \
-      /usr/bin/python3 -u /data_pipeline/task_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
+      /usr/bin/python3 -u /data_pipeline/hybrid_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
 
     echo "=== Completed $ENV - $TYPE ==="
   done

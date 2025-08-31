@@ -71,9 +71,9 @@ PLANNED_PATH_LENGTH = 300  # An OMPL parameter for interpolations
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 TERMINATION_RADIUS = 0.15  # Helpful for Lula because it struggles with convergence
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 2  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 20  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    8  # The number of total candidate start or goals to use to plan experts
+    98  # The number of total candidate start or goals to use to plan experts
 )
 MAX_JERK = 0.15  # Used for validating the hybrid expert trajectories
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
