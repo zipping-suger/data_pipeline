@@ -213,7 +213,7 @@ def get_fabric_chunks(
     fabric_robot_description_path = str(
         Path(__file__).resolve().parent.parent.parent
         # / "learn_to_reach/data_pipeline/config"
-        / "/cluster/home/yixili/data_pipeline/config"
+        / "data_pipeline/config"
         / "franka_robot_description.yaml"
     )
     assert Path(
@@ -222,7 +222,7 @@ def get_fabric_chunks(
     fabric_config_path = str(
         Path(__file__).resolve().parent.parent.parent
         # / "learn_to_reach/data_pipeline/config"
-        / "/cluster/home/yixili/data_pipeline/config"
+        / "data_pipeline/config"
         / "franka_fabric_config.yaml"
     )
     assert Path(fabric_config_path).exists(), f"{fabric_config_path} not found"
