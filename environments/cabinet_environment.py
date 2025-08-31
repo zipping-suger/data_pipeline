@@ -32,8 +32,8 @@ class Cabinet:
     """
 
     def __init__(self):
-        self.cabinet_left = radius_sample(0.4, 0.1)
-        self.cabinet_right = radius_sample(-0.4, 0.1)
+        self.cabinet_left = radius_sample(0.4, 0.2)
+        self.cabinet_right = radius_sample(-0.4, 0.2)
         self.cabinet_bottom = radius_sample(0.2, 0.1)
         self.cabinet_front = radius_sample(0.5, 0.2)
         self.cabinet_back = self.cabinet_front + radius_sample(0.4, 0.2)
