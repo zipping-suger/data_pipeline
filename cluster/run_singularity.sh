@@ -55,7 +55,7 @@ for ENV in "${ENVS[@]}"; do
       --env ACCEPT_EULA=Y \
       --env TMPDIR="$SCRATCH_TMP" \
       "${CONTAINER_IMAGE}" \
-      /usr/bin/python3 -u /data_pipeline/hybrid_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
+      /usr/bin/python3 -u /data_pipeline/ompl_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
 
     echo "=== Completed $ENV - $TYPE ==="
   done
