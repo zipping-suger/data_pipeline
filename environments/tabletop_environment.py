@@ -16,6 +16,7 @@ from data_pipeline.environments.base_environment import (
     NeutralCandidate,
     FreeSpaceCandidate,
     Environment,
+    Tool,
 )
 
 
@@ -46,6 +47,7 @@ class TabletopEnvironment(Environment):
         self.objects = []
         self.tables = []  # The tables with objects on it
         self.clear_tables = []  # The tables without objects
+        self._tools = None  # Use _tools instead of tools
 
     def _gen(self, selfcc: FrankaSelfCollisionChecker, how_many: int) -> bool:
         """
@@ -61,17 +63,18 @@ class TabletopEnvironment(Environment):
         self.reset()
         self.setup_tables()
         self.place_objects(how_many)
-        cand1 = self.gen_candidate(selfcc)
+        self.generate_tool()
+
+        cand1 = self.gen_candidate(selfcc, self.tools)
         if cand1 is None:
-            self.objects = []
             return False
-        cand2 = self.gen_candidate(selfcc)
+            
+        cand2 = self.gen_candidate(selfcc, self.tools)
         if cand2 is None:
-            self.objects = []
             return False
+            
         self.demo_candidates = [cand1, cand2]
         return True
-
 
     def _gen_free_space_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker
@@ -93,7 +96,7 @@ class TabletopEnvironment(Environment):
             "pitch": (-np.pi / 2, np.pi / 2),
             "yaw": (-np.pi, np.pi),
         }
-
+        
         while len(candidates) < how_many:
             # Generate random pose within specified ranges
             x = np.random.uniform(*position_ranges["x"])
@@ -112,6 +115,10 @@ class TabletopEnvironment(Environment):
             if sim.in_collision(gripper):
                 continue
 
+            # NEW: Check tool collision
+            if self._check_tool_collision(pose, self.obstacles, self.tools):
+                continue
+
             # Solve IK
             q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=5)
             if q is not None:
@@ -124,6 +131,7 @@ class TabletopEnvironment(Environment):
                             config=q,
                             pose=pose,
                             negative_volumes=[],
+                            tool=self.tools
                         )
                     )
         return candidates
@@ -144,6 +152,7 @@ class TabletopEnvironment(Environment):
         arm = sim.load_robot(FrankaRobot)
         sim.load_primitives(self.obstacles)
         candidates = []
+                
         for _ in range(how_many * 50):
             if len(candidates) >= how_many:
                 break
@@ -156,9 +165,11 @@ class TabletopEnvironment(Environment):
                 pose = FrankaRealRobot.fk(sample, eff_frame="right_gripper")
                 gripper.marionette(pose)
                 if not sim.in_collision(gripper):
-                    candidates.append(
-                        NeutralCandidate(config=sample, pose=pose, negative_volumes=[])
-                    )
+                    # NEW: Check tool collision
+                    if not self._check_tool_collision(pose, self.obstacles, self.tools):
+                        candidates.append(
+                            NeutralCandidate(config=sample, pose=pose, negative_volumes=[], tool=self.tools)
+                        )
         return candidates
 
     def place_objects(self, how_many: int):
@@ -194,6 +205,13 @@ class TabletopEnvironment(Environment):
         :rtype List[Union[Cuboid, Cylinder]]: The list of obstacles in the scene
         """
         return self.tables + self.clear_tables + self.objects
+    
+    @property
+    def tools(self) -> Optional[Tool]:
+        """
+        Returns all attatched tools in the scene. Can be None.
+        """
+        return self._tools
 
     @property
     def cuboids(self) -> List[Cuboid]:
@@ -375,67 +393,101 @@ class TabletopEnvironment(Environment):
                                                   mimic the internal Franka collision checker.
         :rtype List[List[TaskOrientedCandidate]]: A list of candidate sets, where each has `how_many`
                                       candidates on the table.
-        """
-        candidate_sets = []
-        for _ in range(2):
-            candidate_set = []
-            while len(candidate_set) <= how_many:
-                candidate = self.gen_candidate(selfcc)
-                if candidate is not None:
-                    candidate_set.append(candidate)
-            candidate_sets.append(candidate_set)
-        return candidate_sets
+        """        
+        cand_set1 = []
+        while len(cand_set1) < how_many:
+            cand = self.gen_candidate(selfcc, self.tools)
+            if cand is not None:
+                cand_set1.append(cand)
 
-    def gen_candidate(
-        self, selfcc: FrankaSelfCollisionChecker
-    ) -> Optional[TaskOrientedCandidate]:
-        """
-        Generates a valid, collision-free end effector pose (according to this
-        environment's distribution) and a corresponding collision-free inverse kinematic
-        solution. The poses will always be along the tabletop or on top of objects.
-        They are densely distributed close to the surface and less frequently further
-        above the table.
+        cand_set2 = []
+        while len(cand_set2) < how_many:
+            cand = self.gen_candidate(selfcc, self.tools)
+            if cand is not None:
+                cand_set2.append(cand)
+        
+        return [cand_set1, cand_set2]
 
-        :param selfcc FrankaSelfCollisionChecker: Checks for self collisions using spheres that
-                                                  mimic the internal Franka collision checker.
-        :rtype TaskOrientedCandidate: A valid candidate
-        :raises Exception: Raises an exception if there are unsupported objects on the table
-        """
+    def gen_candidate(self, selfcc: FrankaSelfCollisionChecker, tool: Tool) -> Optional[TaskOrientedCandidate]:
         points = self.random_points_on_table(100)
         sim = Bullet(gui=False)
         sim.load_primitives(self.obstacles)
         gripper = sim.load_robot(FrankaGripper)
         arm = sim.load_robot(FrankaRobot)
+            
         q = None
         pose = None
         for p in points:
+            # Determine base height based on surface type
+            base_height = p[2]
             for o in self.objects:
                 if o.sdf(p) <= 0.01:
-                    on_top_of_object = True
                     if isinstance(o, Cuboid):
-                        p[2] = o.center[2] + o.half_extents[2]
+                        base_height = o.center[2] + o.half_extents[2]
                     elif isinstance(o, Cylinder):
-                        p[2] = o.center[2] + o.height / 2
-                    else:
-                        raise Exception("Object can only be cuboid or cylinder")
-            p[2] = p[2] + random_linear_decrease() * (0.12 - 0.01) / (1 - 0) + 0.01
-            roll = np.random.uniform(3 * np.pi / 4, 5 * np.pi / 4)
-            pitch = np.random.uniform(-np.pi / 8, np.pi / 8)
+                        base_height = o.center[2] + o.height / 2
+            
+            # MODIFIED HEIGHT SAMPLING: Account for primitive length
+            min_safe_height = 0.2 
+            max_safe_height = 0.35
+
+            # Sample height with bias toward lower values but ensuring primitive clearance
+            p[2] = base_height + random_linear_decrease() * (max_safe_height - min_safe_height) + min_safe_height
+            
+            # MODIFIED ORIENTATION SAMPLING: Avoid pointing primitive into table
+            # Keep roll mostly downward-facing but with tighter bounds
+            roll = np.random.uniform(4 * np.pi / 5, 6 * np.pi / 5)  # 144°-216°
+            
+            # Constrain pitch to avoid horizontal orientations that might collide
+            pitch = np.random.uniform(-np.pi / 12, np.pi / 12)  # ±15°
+            
+            # Yaw can be mostly free but avoid orientations where primitive hits objects
             yaw = np.random.uniform(-np.pi / 2, np.pi / 2)
+            
             pose = SE3(xyz=p, so3=SO3.from_rpy(roll, pitch, yaw))
+            # Check collision for gripper with attached primitive
             gripper.marionette(pose)
+
+            # Check tool collision using the new helper method
+            if self._check_tool_collision(pose, self.obstacles, tool):
+                pose = None
+                continue
+            
             if sim.in_collision(gripper):
                 pose = None
                 continue
+                
             q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=1000)
             if q is not None:
                 break
+                
         if pose is None or q is None:
             return None
+            
         return TaskOrientedCandidate(
             pose=pose,
             config=q,
             negative_volumes=[],
+            tool=tool
+        )
+
+    def generate_tool(self):
+        """
+        Generates a random tool by sampling dimensions.
+        """
+        # Sample dimensions for the tool (cuboid)
+        dim_x = np.random.uniform(0.05, 0.2)
+        dim_y = np.random.uniform(0.05, 0.2)
+        dim_z = np.random.uniform(0.05, 0.2)
+        
+        # The offset is based on the z-dimension to keep it centered
+        offset_z = dim_z / 2.0
+        
+        self._tools = Tool(
+            primitive_type='cuboid',
+            dims=[dim_x, dim_y, dim_z],
+            offset=[0, 0, offset_z],
+            offset_quaternion=[1, 0, 0, 0]
         )
 
     def random_object(

@@ -31,26 +31,9 @@ from data_pipeline.environments.base_environment import (
     NeutralCandidate,
     Environment,
 )
-from data_pipeline.environments.cubby_environment import (
-    CubbyEnvironment,
-    MergedCubbyEnvironment,
-)
-from data_pipeline.environments.dresser_environment import (
-    DresserEnvironment,
-)
+
 from data_pipeline.environments.tabletop_environment import (
     TabletopEnvironment,
-)
-from data_pipeline.environments.free_environment import (
-    FreeSpaceEnvironment
-)
-
-from data_pipeline.environments.cabinet_environment import (
-    CabinetEnvironment,
-)
-
-from data_pipeline.environments.pillar_environment import (
-    PillarEnvironment,
 )
 
 from prob_types import PlanningProblem
@@ -61,8 +44,8 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"
 CUBOID_CUTOFF = 40
 CYLINDER_CUTOFF = 40
-NUM_SCENES = 12000
-NUM_PLANS_PER_SCENE = 98
+NUM_SCENES = 5
+NUM_PLANS_PER_SCENE = 10
 PIPELINE_TIMEOUT = 3600  # 10 hours
 
 
@@ -245,6 +228,16 @@ def gen_single_env(_: Any):
         cylinder_centers = f.create_dataset("cylinder_centers", (num_cylinders, 3))
         cylinder_quats = f.create_dataset("cylinder_quaternions", (num_cylinders, 4))
 
+        # Tool info datasets (for both start and target candidates)
+        # primitive_type as fixed-length string (e.g. S16), dims/offset as (n,3), offset_quaternion as (n,4)
+        start_tool_dims = f.create_dataset("start_tool_dims", (n, 3))
+        start_tool_offset = f.create_dataset("start_tool_offset", (n, 3))
+        start_tool_quat = f.create_dataset("start_tool_quaternion", (n, 4))
+        
+        target_tool_dims = f.create_dataset("target_tool_dims", (n, 3))
+        target_tool_offset = f.create_dataset("target_tool_offset", (n, 3))
+        target_tool_quat = f.create_dataset("target_tool_quaternion", (n, 4))
+
         # Save problems
         for i, problem in enumerate(problems):
             start_configs[i] = problem.start_candidate.config
@@ -257,6 +250,28 @@ def gen_single_env(_: Any):
             # Target pose (xyz + quaternion wxyz)
             target_poses[i, 0:3] = problem.target_candidate.pose.xyz
             target_poses[i, 3:7] = problem.target_candidate.pose.so3.wxyz
+
+            # Tool info for start candidate
+            tool = getattr(problem.start_candidate, 'tool', None)
+            if tool is not None:
+                start_tool_dims[i] = tool.dims
+                start_tool_offset[i] = tool.offset
+                start_tool_quat[i] = tool.offset_quaternion
+            else:
+                start_tool_dims[i] = [0,0,0]
+                start_tool_offset[i] = [0,0,0]
+                start_tool_quat[i] = [1,0,0,0]
+
+            # Tool info for target candidate
+            tool = getattr(problem.target_candidate, 'tool', None)
+            if tool is not None:
+                target_tool_dims[i] = tool.dims
+                target_tool_offset[i] = tool.offset
+                target_tool_quat[i] = tool.offset_quaternion
+            else:
+                target_tool_dims[i] = [0,0,0]
+                target_tool_offset[i] = [0,0,0]
+                target_tool_quat[i] = [1,0,0,0]
 
         # Save obstacles
         for j, cuboid in enumerate(env.cuboids):
@@ -299,8 +314,12 @@ def merge_and_cleanup():
 
     with h5py.File(f"{FINAL_DATA_DIR}/all_data.hdf5", "w-") as f:
         # Problem datasets
-        start_configs = f.create_dataset("start_configs", (total_problems, 7))
-        target_configs = f.create_dataset("target_configs", (total_problems, 7))
+        start_configs = f.create_dataset(
+            "start_configs", (total_problems, 7)
+        )
+        target_configs = f.create_dataset(
+            "target_configs", (total_problems, 7)
+        )
         start_poses = f.create_dataset("start_poses", (total_problems, 7))
         target_poses = f.create_dataset("target_poses", (total_problems, 7))
 
@@ -325,6 +344,27 @@ def merge_and_cleanup():
             "cylinder_quaternions", (total_problems, max_cylinders, 4)
         )
 
+        # Tool info datasets (for both start and target candidates)
+        start_tool_dims = f.create_dataset(
+            "start_tool_dims", (total_problems, 3)
+        )
+        start_tool_offset = f.create_dataset(
+            "start_tool_offset", (total_problems, 3)
+        )
+        start_tool_quat = f.create_dataset(
+            "start_tool_quaternion", (total_problems, 4)
+        )
+
+        target_tool_dims = f.create_dataset(
+            "target_tool_dims", (total_problems, 3)
+        )
+        target_tool_offset = f.create_dataset(
+            "target_tool_offset", (total_problems, 3)
+        )
+        target_tool_quat = f.create_dataset(
+            "target_tool_quaternion", (total_problems, 4)
+        )
+
         chunk_start = 0
         for fi in all_files:
             with h5py.File(fi, "r") as g:
@@ -332,12 +372,29 @@ def merge_and_cleanup():
                 chunk_end = chunk_start + n
 
                 # Copy problem data
-                start_configs[chunk_start:chunk_end] = g["start_configs"][...]
-                target_configs[chunk_start:chunk_end] = g["target_configs"][...]
+                start_configs[chunk_start:chunk_end] = \
+                    g["start_configs"][...]
+                target_configs[chunk_start:chunk_end] = \
+                    g["target_configs"][...]
                 start_poses[chunk_start:chunk_end] = g["start_poses"][...]
                 target_poses[chunk_start:chunk_end] = g["target_poses"][...]
 
-                # Copy and pad obstacles
+                # Copy tool info for start and target candidates
+                start_tool_dims[chunk_start:chunk_end] = \
+                    g["start_tool_dims"][...]
+                start_tool_offset[chunk_start:chunk_end] = \
+                    g["start_tool_offset"][...]
+                start_tool_quat[chunk_start:chunk_end] = \
+                    g["start_tool_quaternion"][...]
+
+                target_tool_dims[chunk_start:chunk_end] = \
+                    g["target_tool_dims"][...]
+                target_tool_offset[chunk_start:chunk_end] = \
+                    g["target_tool_offset"][...]
+                target_tool_quat[chunk_start:chunk_end] = \
+                    g["target_tool_quaternion"][...]
+
+                # Copy obstacles (pad if needed)
                 num_cuboids = len(g["cuboid_dims"])
                 num_cylinders = len(g["cylinder_radii"])
 
@@ -486,7 +543,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "env_type",
-        choices=["free", "tabletop", "cubby", "merged-cubby", "dresser"],
+        choices=["free", "tabletop", "cubby", "merged-cubby", "dresser", "cabinet", "pillar"],
         help="Environment type",
     )
     parser.add_argument(

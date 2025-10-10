@@ -2,11 +2,11 @@ from abc import (
     ABC,
     abstractmethod,
 )
-from typing import List, Union, List, Any
+from typing import List, Union, List, Any, Optional
 from robofin.collision import FrankaSelfCollisionChecker
 from geometrout.primitive import Cuboid, Cylinder
 from dataclasses import dataclass, field
-from geometrout.transform import SE3
+from geometrout.transform import SO3, SE3
 import numpy as np
 from prob_types import Obstacles
 
@@ -22,6 +22,17 @@ def radius_sample(center: float, radius: float):
 
 
 @dataclass
+class Tool:
+    """
+    Represents a tool in the environment
+    """
+    primitive_type: str
+    dims: List[float]
+    offset: List[float]
+    offset_quaternion: List[float]
+
+
+@dataclass
 class Candidate:
     """
     Represents a configuration and the corresponding end-effector pose
@@ -31,6 +42,7 @@ class Candidate:
     pose: SE3
     config: np.ndarray
     negative_volumes: Obstacles
+    tool: Optional[Tool] = None
 
 
 @dataclass
@@ -68,6 +80,7 @@ class Environment(ABC):
     def __init__(self):
         self.generated = False
         self.demo_candidates = []
+        self._tools = None  # Renamed from self.tools to self._tools
         pass
 
     @property
@@ -78,7 +91,11 @@ class Environment(ABC):
         :rtype List[Union[Cuboid, Cylinder]]: The list of obstacles in the scene
         """
         pass
-
+    
+    @property
+    def tools(self) -> Optional[Tool]:
+        return self._tools
+    
     @property
     @abstractmethod
     def cuboids(self) -> List[Cuboid]:
@@ -96,6 +113,52 @@ class Environment(ABC):
         :rtype List[Cylinder]: The list of cylinders in the scene
         """
         pass
+    
+    @staticmethod
+    def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]], tool: Tool) -> bool:
+        """
+        Check if the tool (attached primitive) collides with any obstacles.
+        
+        :param gripper_pose: The pose of the gripper
+        :param obstacles: List of obstacles to check against
+        :return: True if collision detected, False otherwise
+        """
+        num_surface_points = 50  # Points on the surface
+        
+        # Create offset transformation relative to gripper frame
+        offset_transform = SE3(
+            xyz=tool.offset, 
+            so3=SO3(quaternion=tool.offset_quaternion)
+        )
+        
+        # Combine with the gripper pose: primitive_pose = gripper_pose * offset_transform
+        primitive_pose = gripper_pose @ offset_transform
+        
+        # Create the primitive cuboid at the correct pose
+        primitive_cuboid = Cuboid(
+            center=primitive_pose.xyz,
+            dims=tool.dims,
+            quaternion=primitive_pose.so3.wxyz
+        )
+        
+        # Sample multiple points in the volume for collision checking
+        primitive_corners = primitive_cuboid.corners
+        surface_points = primitive_cuboid.sample_surface(num_surface_points, noise=0.0)
+        all_check_points = np.vstack([primitive_corners, surface_points])
+        
+        # Check collision with all obstacles
+        for obstacle in obstacles:
+            # Check all sampled points for collision
+            for point in all_check_points:
+                if obstacle.sdf(point) < 0:  # Negative SDF means inside obstacle
+                    return True
+            
+            # Additional check: test the center as well
+            center_sdf = obstacle.sdf(primitive_pose.xyz)
+            if center_sdf < 0:
+                return True
+            
+        return False
 
     def gen(self, selfcc: FrankaSelfCollisionChecker, **kwargs: Any) -> bool:
         """

@@ -3,8 +3,9 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import random
 
+# Import geometrout necessities
 from geometrout.primitive import Cuboid, Cylinder
-from geometrout.transform import SE3
+from geometrout.transform import SE3, SO3
 from robofin.bullet import Bullet, BulletFranka, BulletFrankaGripper
 from robofin.robots import FrankaGripper, FrankaRobot, FrankaRealRobot
 from robofin.collision import FrankaSelfCollisionChecker
@@ -287,15 +288,73 @@ class CabinetEnvironment(Environment):
         self.demo_candidates = []
         self.cabinet = None
 
+    def _check_tool_collision(self, gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]]) -> bool:
+        """
+        Check if the tool (attached primitive) collides with any obstacles.
+        (Copied from TabletopEnvironment for consistency)
+        
+        :param gripper_pose: The pose of the gripper
+        :param obstacles: List of obstacles to check against
+        :return: True if collision detected, False otherwise
+        """
+        # Define attached primitive properties (same as in tabletop_environment)
+        attached_primitive = {
+            'type': 'cuboid',
+            'dims': [0.05, 0.05, 0.2],
+            'offset': [0, 0, 0.1],
+            'offset_quaternion': [1, 0, 0, 0]
+        }
+        
+        num_surface_points = 50  # Points on the surface
+        
+        # Create offset transformation relative to gripper frame
+        offset_transform = SE3(
+            xyz=attached_primitive['offset'], 
+            so3=SO3(quaternion=attached_primitive['offset_quaternion'])
+        )
+        
+        # Combine with the gripper pose: primitive_pose = gripper_pose * offset_transform
+        primitive_pose = gripper_pose @ offset_transform
+        
+        # Create the primitive cuboid at the correct pose
+        # NOTE: Even though the primitive is defined as 'cuboid' in the dict,
+        # we create the actual Cuboid object here.
+        primitive_cuboid = Cuboid(
+            center=primitive_pose.xyz,
+            dims=attached_primitive['dims'],
+            quaternion=primitive_pose.so3.wxyz
+        )
+        
+        # Sample multiple points in the volume for collision checking
+        primitive_corners = primitive_cuboid.corners
+        surface_points = primitive_cuboid.sample_surface(num_surface_points, noise=0.0)
+        all_check_points = np.vstack([primitive_corners, surface_points])
+        
+        # Check collision with all obstacles
+        for obstacle in obstacles:
+            # Check all sampled points for collision
+            for point in all_check_points:
+                if obstacle.sdf(point) < 0:  # Negative SDF means inside obstacle
+                    return True
+            
+            # Additional check: test the center as well
+            center_sdf = obstacle.sdf(primitive_pose.xyz)
+            if center_sdf < 0:
+                return True
+        
+        return False
+        
     def _gen(self, selfcc: FrankaSelfCollisionChecker) -> bool:
         self.cabinet = Cabinet()
         supports = self.cabinet.support_volumes
 
         sim = Bullet(gui=False)
-        sim.load_primitives(self.cabinet.cuboids)
+        # Load obstacles for random_pose_and_config
+        sim.load_primitives(self.cabinet.cuboids) 
         gripper = sim.load_robot(FrankaGripper)
         arm = sim.load_robot(FrankaRobot)
 
+        # Call random_pose_and_config, which now includes tool collision check
         start_pose, start_q = self.random_pose_and_config(
             sim, gripper, arm, selfcc, supports[0]
         )
@@ -333,6 +392,9 @@ class CabinetEnvironment(Environment):
     ) -> Tuple[Optional[SE3], Optional[np.ndarray]]:
         samples = support_volume.sample_volume(100)
         pose, q = None, None
+        # Obstacles are the cabinet cuboids
+        obstacles = self.cabinet.cuboids if self.cabinet else [] 
+
         for sample in samples:
             theta = radius_sample(0, np.pi / 4) if np.random.rand() < 0.5 else (np.random.rand() * np.pi / 2 - np.pi / 4)
             x = np.array([np.cos(theta), np.sin(theta), 0])
@@ -345,9 +407,17 @@ class CabinetEnvironment(Environment):
                 z=z,
             )
             gripper.marionette(pose)
+            
+            # Check gripper collision
             if sim.in_collision(gripper):
                 pose = None
                 continue
+            
+            # NEW: Check tool collision
+            if self._check_tool_collision(pose, obstacles):
+                pose = None
+                continue
+                
             q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=1000)
             if q is not None:
                 break
@@ -372,6 +442,9 @@ class CabinetEnvironment(Environment):
             "pitch": (-np.pi / 2, np.pi / 2),
             "yaw": (-np.pi, np.pi),
         }
+        
+        # Obstacles are the cabinet cuboids
+        obstacles = self.obstacles 
 
         while len(candidates) < how_many:
             x = np.random.uniform(*position_ranges["x"])
@@ -389,6 +462,10 @@ class CabinetEnvironment(Environment):
             if sim.in_collision(gripper):
                 continue
 
+            # NEW: Check tool collision
+            if self._check_tool_collision(pose, obstacles):
+                continue
+                
             q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=5)
             if q is not None:
                 arm.marionette(q)
@@ -413,6 +490,10 @@ class CabinetEnvironment(Environment):
         arm = sim.load_robot(FrankaRobot)
         sim.load_primitives(self.obstacles)
         candidates: List[NeutralCandidate] = []
+        
+        # Obstacles are the cabinet cuboids
+        obstacles = self.obstacles 
+
         for _ in range(how_many * 50):
             if len(candidates) >= how_many:
                 break
@@ -425,13 +506,15 @@ class CabinetEnvironment(Environment):
                 pose = FrankaRealRobot.fk(sample, eff_frame="right_gripper")
                 gripper.marionette(pose)
                 if not sim.in_collision(gripper):
-                    candidates.append(
-                        NeutralCandidate(
-                            config=sample,
-                            pose=pose,
-                            negative_volumes=self.cabinet.support_volumes,
+                    # NEW: Check tool collision
+                    if not self._check_tool_collision(pose, obstacles):
+                        candidates.append(
+                            NeutralCandidate(
+                                config=sample,
+                                pose=pose,
+                                negative_volumes=self.cabinet.support_volumes,
+                            )
                         )
-                    )
         return candidates
 
     def _gen_additional_candidate_sets(
@@ -467,11 +550,12 @@ class CabinetEnvironment(Environment):
 
     @property
     def obstacles(self) -> List[Union[Cuboid, Cylinder]]:
-        return self.cabinet.cuboids
+        # Cabinet must be initialized by _gen first
+        return self.cabinet.cuboids if self.cabinet else []
 
     @property
     def cuboids(self) -> List[Cuboid]:
-        return self.cabinet.cuboids
+        return self.cabinet.cuboids if self.cabinet else []
 
     @property
     def cylinders(self) -> List[Cylinder]:

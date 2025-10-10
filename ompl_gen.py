@@ -18,10 +18,9 @@ from pyquaternion import Quaternion
 from robofin.collision import FrankaSelfCollisionChecker
 from robofin.bullet import Bullet, BulletFranka
 from robofin.robots import FrankaRobot, FrankaRealRobot, FrankaGripper
-from atob.planner import (
+from planner import (
     FrankaAITStarPlanner,
     FrankaRRTConnectPlanner,
-    FrankaAITStarHandPlanner,
 )
 import itertools
 from geometrout.primitive import Cuboid, Cylinder
@@ -31,33 +30,15 @@ from dataclasses import dataclass, field
 import logging
 from atob.trajectory import Trajectory
 from data_pipeline.environments.base_environment import (
+    Tool,
     Candidate,
     TaskOrientedCandidate,
     FreeSpaceCandidate,
     NeutralCandidate,
     Environment,
 )
-from data_pipeline.environments.cubby_environment import (
-    CubbyEnvironment,
-    MergedCubbyEnvironment,
-)
-from data_pipeline.environments.dresser_environment import (
-    DresserEnvironment,
-)
 from data_pipeline.environments.tabletop_environment import (
     TabletopEnvironment,
-)
-
-from data_pipeline.environments.free_environment import (
-    FreeSpaceEnvironment
-)
-
-from data_pipeline.environments.pillar_environment import (
-    PillarEnvironment
-)
-
-from data_pipeline.environments.cabinet_environment import (
-    CabinetEnvironment
 )
 
 from prob_types import PlanningProblem
@@ -68,9 +49,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 600  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 8  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    98  # The number of total candidate start or goals to use to plan experts
+    2  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 
@@ -88,6 +69,7 @@ class Result:
 
     start_candidate: Candidate
     target_candidate: Candidate
+    attached_tools: Tool
     error_codes: List[str] = field(default_factory=list)
     cuboids: List[Cuboid] = field(default_factory=list)
     cylinders: List[Cylinder] = field(default_factory=list)
@@ -97,6 +79,7 @@ class Result:
 def solve_global_plan(
     start_candidate: Candidate,
     target_candidate: Candidate,
+    attached_tools: Tool,
     obstacles: List[Union[Cuboid, Cylinder]],
     selfcc: FrankaSelfCollisionChecker,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -118,6 +101,7 @@ def solve_global_plan(
     sim.load_primitives(obstacles)
     robot = sim.load_robot(FrankaRobot)
     planner.load_simulation(sim, robot)
+    planner.load_envs_attached_tools(obstacles, attached_tools)
     planner.load_self_collision_checker(selfcc)
     path = planner.plan(
         start=start_candidate.config,
@@ -270,6 +254,7 @@ def verify_trajectory(
 def forward_backward(
     candidate1: Candidate,
     candidate2: Candidate,
+    attached_tools: Tool,
     cuboids: List[Cuboid],
     cylinders: List[Cylinder],
     selfcc: FrankaSelfCollisionChecker,
@@ -291,7 +276,7 @@ def forward_backward(
     sim.load_primitives(cuboids + cylinders)
 
     global_forward, global_backward = solve_global_plan(
-        candidate1, candidate2, cuboids + cylinders, selfcc
+        candidate1, candidate2, attached_tools, cuboids + cylinders, selfcc
     )
     if len(global_forward) != len(global_backward):
         logging.warning(
@@ -305,6 +290,7 @@ def forward_backward(
         cylinders=cylinders,
         start_candidate=candidate1,
         target_candidate=candidate2,
+        attached_tools=attached_tools,
     )
     backward_result = Result(
         global_solution=global_backward,
@@ -312,6 +298,7 @@ def forward_backward(
         cylinders=cylinders,
         start_candidate=candidate2,
         target_candidate=candidate1,
+        attached_tools=attached_tools,
     )
     results = [forward_result, backward_result]
     return results
@@ -350,7 +337,7 @@ def exhaust_environment(
         else:
             nonfree_space_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
         for c1, c2 in itertools.product(free_space_candidates, nonfree_space_candidates):
-            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+            results.extend(forward_backward(c1, c2, env.tools, env.cuboids, env.cylinders, selfcc))
     elif prob_type == "neutral":
         neutral_candidates = env.gen_neutral_candidates(n, selfcc)
         random.shuffle(candidates[0])
@@ -363,15 +350,19 @@ def exhaust_environment(
         else:
             nonneutral_candidates = candidates[0][: n // 2] + candidates[1][: n // 2]
         for c1, c2 in itertools.product(neutral_candidates, nonneutral_candidates):
-            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+            results.extend(forward_backward(c1, c2, env.tools, env.cuboids, env.cylinders, selfcc))
     elif prob_type == "task-oriented":
         for c1, c2 in itertools.product(candidates[0], candidates[1]):
-            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+            results.extend(
+                forward_backward(
+                    c1, c2, env.tools, env.cuboids, env.cylinders, selfcc
+                )
+            )
     elif prob_type == "free-space":
          free_space_candidates_1 = env._gen_free_space_candidates(n, selfcc)
          free_space_candidates_2 = env._gen_free_space_candidates(n, selfcc)
          for c1, c2 in itertools.product(free_space_candidates_1, free_space_candidates_2):
-            results.extend(forward_backward(c1, c2, env.cuboids, env.cylinders, selfcc))
+            results.extend(forward_backward(c1, c2, env.tools, env.cuboids, env.cylinders, selfcc))
     else:
         raise NotImplementedError(
             f"Prob type {prob_type} not implemented for environment generation"
@@ -399,6 +390,7 @@ def verify_has_solvable_problems(
     sim.load_primitives(env.obstacles)
     robot = sim.load_robot(FrankaRobot)
     planner.load_simulation(sim, robot)
+    planner.load_envs_attached_tools(env.obstacles, env.tools)
     planner.load_self_collision_checker(selfcc)
     path = planner.plan(
         start=env.demo_candidates[0].config,
@@ -501,6 +493,15 @@ def gen_single_env(_: Any):
         cylinder_heights = f.create_dataset("cylinder_heights", (len(cylinders), 1))
         cylinder_centers = f.create_dataset("cylinder_centers", (len(cylinders), 3))
         cylinder_quats = f.create_dataset("cylinder_quaternions", (len(cylinders), 4))
+        
+        # Tool info datasets (for both start and target candidates)
+        start_tool_dims = f.create_dataset("start_tool_dims", (n, 3))
+        start_tool_offset = f.create_dataset("start_tool_offset", (n, 3))
+        start_tool_quat = f.create_dataset("start_tool_quaternion", (n, 4))
+        
+        target_tool_dims = f.create_dataset("target_tool_dims", (n, 3))
+        target_tool_offset = f.create_dataset("target_tool_offset", (n, 3))
+        target_tool_quat = f.create_dataset("target_tool_quaternion", (n, 4))
 
         for ii in range(n):
             global_solutions[ii, :, :] = results[ii].global_solution
@@ -513,6 +514,28 @@ def gen_single_env(_: Any):
             cylinder_heights[kk, :] = cylinders[kk].height
             cylinder_centers[kk, :] = cylinders[kk].pose.xyz
             cylinder_quats[kk, :] = cylinders[kk].pose.so3.wxyz
+            
+        # Fill in tool info datasets
+        for ii in range(n):
+            start_tool = getattr(results[ii].start_candidate, 'tool', None)
+            if start_tool is not None:
+                start_tool_dims[ii, :] = start_tool.dims
+                start_tool_offset[ii, :] = start_tool.offset
+                start_tool_quat[ii, :] = start_tool.offset_quaternion
+            else:
+                start_tool_dims[ii, :] = [0, 0, 0]
+                start_tool_offset[ii, :] = [0, 0, 0]
+                start_tool_quat[ii, :] = [1, 0, 0, 0]
+
+            target_tool = getattr(results[ii].target_candidate, 'tool', None)
+            if target_tool is not None:
+                target_tool_dims[ii, :] = target_tool.dims
+                target_tool_offset[ii, :] = target_tool.offset
+                target_tool_quat[ii, :] = target_tool.offset_quaternion
+            else:
+                target_tool_dims[ii, :] = [0, 0, 0]
+                target_tool_offset[ii, :] = [0, 0, 0]
+                target_tool_quat[ii, :] = [1, 0, 0, 0]
 
 
 def gen():
@@ -572,6 +595,14 @@ def gen():
         cylinder_quats = f.create_dataset(
             "cylinder_quaternions", (total_trajectories, max_cylinders, 4)
         )
+        
+        # Tool info datasets (for both start and target candidates)
+        start_tool_dims = f.create_dataset("start_tool_dims", (total_trajectories, 3))
+        start_tool_offset = f.create_dataset("start_tool_offset", (total_trajectories, 3))
+        start_tool_quat = f.create_dataset("start_tool_quaternion", (total_trajectories, 4))
+        target_tool_dims = f.create_dataset("target_tool_dims", (total_trajectories, 3))
+        target_tool_offset = f.create_dataset("target_tool_offset", (total_trajectories, 3))
+        target_tool_quat = f.create_dataset("target_tool_quaternion", (total_trajectories, 4))
 
         chunk_start = 0
         chunk_end = 0
@@ -599,6 +630,14 @@ def gen():
                     cylinder_quats[idx, :num_cylinders, ...] = g[
                         "cylinder_quaternions"
                     ][...]
+                    # Tool info
+                    start_tool_dims[idx, :] = g["start_tool_dims"][idx-chunk_start, :]
+                    start_tool_offset[idx, :] = g["start_tool_offset"][idx-chunk_start, :]
+                    start_tool_quat[idx, :] = g["start_tool_quaternion"][idx-chunk_start, :]
+                    target_tool_dims[idx, :] = g["target_tool_dims"][idx-chunk_start, :]
+                    target_tool_offset[idx, :] = g["target_tool_offset"][idx-chunk_start, :]
+                    target_tool_quat[idx, :] = g["target_tool_quaternion"][idx-chunk_start, :]
+                    
             chunk_start = chunk_end
     for fi in all_files:
         fi.unlink()
@@ -670,6 +709,7 @@ def generate_free_space_inference_data(
 
     with open(save_path, "wb") as f:
         pickle.dump({ENV_TYPE: {"free_space": inference_problems}}, f)
+
     
 def generate_task_oriented_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
@@ -906,8 +946,6 @@ def generate_inference_data(expert_pipeline: str, how_many: int, save_path: str)
             f"Prob type {prob_type} not implemented for inference data generation"
         )
     
-
-
 if __name__ == "__main__":
     """
     This program makes heavy use of global variables. This is **not** best practice,
