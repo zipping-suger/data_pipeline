@@ -29,50 +29,51 @@ class Tool:
     offset: List[float]
     offset_quaternion: List[float]
 
-    
-def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]], tool: Tool) -> bool:
+def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]], tools: List[Tool], buffer=0.03) -> bool:
     """
-    Check if the tool (attached primitive) collides with any obstacles.
-    
+    Check if any of the attached tools (primitives) collide with any obstacles.
+
     :param gripper_pose: The pose of the gripper
     :param obstacles: List of obstacles to check against
+    :param tools: List of Tool objects attached to the gripper
     :return: True if collision detected, False otherwise
     """
     num_surface_points = 50  # Points on the surface
-    
-    # Create offset transformation relative to gripper frame
-    offset_transform = SE3(
-        xyz=tool.offset, 
-        so3=SO3(quaternion=tool.offset_quaternion)
-    )
-    
-    # Combine with the gripper pose: primitive_pose = gripper_pose * offset_transform
-    primitive_pose = gripper_pose @ offset_transform
-    
-    # Create the primitive cuboid at the correct pose
-    primitive_cuboid = Cuboid(
-        center=primitive_pose.xyz,
-        dims=tool.dims,
-        quaternion=primitive_pose.so3.wxyz
-    )
-    
-    # Sample multiple points in the volume for collision checking
-    primitive_corners = primitive_cuboid.corners
-    surface_points = primitive_cuboid.sample_surface(num_surface_points, noise=0.0)
-    all_check_points = np.vstack([primitive_corners, surface_points])
-    
-    # Check collision with all obstacles
-    for obstacle in obstacles:
-        # Check all sampled points for collision
-        for point in all_check_points:
-            if obstacle.sdf(point) < 0:  # Negative SDF means inside obstacle
+
+    for tool in tools:
+        # Create offset transformation relative to gripper frame
+        offset_transform = SE3(
+            xyz=tool.offset,
+            so3=SO3(quaternion=tool.offset_quaternion)
+        )
+
+        # Combine with the gripper pose: primitive_pose = gripper_pose * offset_transform
+        primitive_pose = gripper_pose @ offset_transform
+
+        # Create the primitive cuboid at the correct pose
+        primitive_cuboid = Cuboid(
+            center=primitive_pose.xyz,
+            dims=tool.dims,
+            quaternion=primitive_pose.so3.wxyz
+        )
+
+        # Sample multiple points in the volume for collision checking
+        primitive_corners = primitive_cuboid.corners
+        surface_points = primitive_cuboid.sample_surface(num_surface_points, noise=0.0)
+        all_check_points = np.vstack([primitive_corners, surface_points])
+
+        # Check collision with all obstacles
+        for obstacle in obstacles:
+            # Check all sampled points for collision
+            for point in all_check_points:
+                if obstacle.sdf(point) < buffer:  # Use buffer for collision margin
+                    return True
+
+            # Additional check: test the center as well
+            center_sdf = obstacle.sdf(primitive_pose.xyz)
+            if center_sdf < buffer:
                 return True
-        
-        # Additional check: test the center as well
-        center_sdf = obstacle.sdf(primitive_pose.xyz)
-        if center_sdf < 0:
-            return True
-        
+
     return False
 
 

@@ -115,7 +115,7 @@ class Environment(ABC):
         pass
     
     @staticmethod
-    def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]], tool: Tool) -> bool:
+    def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]], tool: Tool, buffer=0.03) -> bool:
         """
         Check if the tool (attached primitive) collides with any obstacles.
         
@@ -150,12 +150,12 @@ class Environment(ABC):
         for obstacle in obstacles:
             # Check all sampled points for collision
             for point in all_check_points:
-                if obstacle.sdf(point) < 0:  # Negative SDF means inside obstacle
+                if obstacle.sdf(point) < buffer:  # Buffer: point is too close or inside
                     return True
-            
+
             # Additional check: test the center as well
             center_sdf = obstacle.sdf(primitive_pose.xyz)
-            if center_sdf < 0:
+            if center_sdf < buffer:
                 return True
             
         return False
