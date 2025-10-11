@@ -29,6 +29,7 @@ class Tool:
     offset: List[float]
     offset_quaternion: List[float]
 
+
 def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylinder]], tools: List[Tool], buffer=0) -> bool:
     """
     Check if any of the attached tools (primitives) collide with any obstacles.
