@@ -428,8 +428,8 @@ class TabletopEnvironment(Environment):
                         base_height = o.center[2] + o.height / 2
             
             # MODIFIED HEIGHT SAMPLING: Account for primitive length
-            min_safe_height = 0.2 
-            max_safe_height = 0.35
+            min_safe_height = max(0.01, tool.dims[2])  # Ensure at least 1cm clearance
+            max_safe_height = tool.dims[2] + 0.15  # Up to 15cm above the primitive length
 
             # Sample height with bias toward lower values but ensuring primitive clearance
             p[2] = base_height + random_linear_decrease() * (max_safe_height - min_safe_height) + min_safe_height
