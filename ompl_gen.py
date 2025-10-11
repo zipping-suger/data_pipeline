@@ -101,7 +101,7 @@ def solve_global_plan(
     sim.load_primitives(obstacles)
     robot = sim.load_robot(FrankaRobot)
     planner.load_simulation(sim, robot)
-    planner.load_envs_attached_tools(obstacles, attached_tools)
+    planner.load_envs_attached_tools(obstacles, [attached_tools])
     planner.load_self_collision_checker(selfcc)
     path = planner.plan(
         start=start_candidate.config,
@@ -390,7 +390,7 @@ def verify_has_solvable_problems(
     sim.load_primitives(env.obstacles)
     robot = sim.load_robot(FrankaRobot)
     planner.load_simulation(sim, robot)
-    planner.load_envs_attached_tools(env.obstacles, env.tools)
+    planner.load_envs_attached_tools(env.obstacles, [env.tools])
     planner.load_self_collision_checker(selfcc)
     path = planner.plan(
         start=env.demo_candidates[0].config,
