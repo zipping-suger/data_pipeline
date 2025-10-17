@@ -49,9 +49,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 600  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 5  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    98  # The number of total candidate start or goals to use to plan experts
+    2  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 
@@ -483,6 +483,17 @@ def gen_single_env(_: Any):
     cuboids = env.cuboids
     cylinders = env.cylinders
     file_name = f"{TMP_DATA_DIR}/{uuid.uuid4()}.hdf5"
+    
+    # Calculate maximum number of primitives for tools in this file
+    max_primitives = 0
+    for result in results:
+        start_tool = getattr(result.start_candidate, 'tool', None)
+        if start_tool is not None and hasattr(start_tool, 'primitives'):
+            max_primitives = max(max_primitives, len(start_tool.primitives))
+        target_tool = getattr(result.target_candidate, 'tool', None)
+        if target_tool is not None and hasattr(target_tool, 'primitives'):
+            max_primitives = max(max_primitives, len(target_tool.primitives))
+    
     with h5py.File(file_name, "w-") as f:
         global_solutions = f.create_dataset("global_solutions", (n, SEQUENCE_LENGTH, 7))
         cuboid_dims = f.create_dataset("cuboid_dims", (len(cuboids), 3))
@@ -494,14 +505,16 @@ def gen_single_env(_: Any):
         cylinder_centers = f.create_dataset("cylinder_centers", (len(cylinders), 3))
         cylinder_quats = f.create_dataset("cylinder_quaternions", (len(cylinders), 4))
         
-        # Tool info datasets (for both start and target candidates)
-        start_tool_dims = f.create_dataset("start_tool_dims", (n, 3))
-        start_tool_offset = f.create_dataset("start_tool_offset", (n, 3))
-        start_tool_quat = f.create_dataset("start_tool_quaternion", (n, 4))
+        # Tool info datasets (for both start and target candidates) - updated for composite tools
+        start_tool_dims = f.create_dataset("start_tool_dims", (n, max_primitives, 3))
+        start_tool_offset = f.create_dataset("start_tool_offset", (n, max_primitives, 3))
+        start_tool_quat = f.create_dataset("start_tool_quaternion", (n, max_primitives, 4))
+        start_tool_num_primitives = f.create_dataset("start_tool_num_primitives", (n,))
         
-        target_tool_dims = f.create_dataset("target_tool_dims", (n, 3))
-        target_tool_offset = f.create_dataset("target_tool_offset", (n, 3))
-        target_tool_quat = f.create_dataset("target_tool_quaternion", (n, 4))
+        target_tool_dims = f.create_dataset("target_tool_dims", (n, max_primitives, 3))
+        target_tool_offset = f.create_dataset("target_tool_offset", (n, max_primitives, 3))
+        target_tool_quat = f.create_dataset("target_tool_quaternion", (n, max_primitives, 4))
+        target_tool_num_primitives = f.create_dataset("target_tool_num_primitives", (n,))
 
         for ii in range(n):
             global_solutions[ii, :, :] = results[ii].global_solution
@@ -515,27 +528,47 @@ def gen_single_env(_: Any):
             cylinder_centers[kk, :] = cylinders[kk].pose.xyz
             cylinder_quats[kk, :] = cylinders[kk].pose.so3.wxyz
             
-        # Fill in tool info datasets
+        # Fill in tool info datasets for composite tools
         for ii in range(n):
             start_tool = getattr(results[ii].start_candidate, 'tool', None)
-            if start_tool is not None:
-                start_tool_dims[ii, :] = start_tool.dims
-                start_tool_offset[ii, :] = start_tool.offset
-                start_tool_quat[ii, :] = start_tool.offset_quaternion
+            if start_tool is not None and hasattr(start_tool, 'primitives') and start_tool.primitives:
+                num_primitives = len(start_tool.primitives)
+                start_tool_num_primitives[ii] = num_primitives
+                for jj, primitive in enumerate(start_tool.primitives):
+                    start_tool_dims[ii, jj, :] = primitive["dims"]
+                    start_tool_offset[ii, jj, :] = primitive["offset"]
+                    start_tool_quat[ii, jj, :] = primitive["offset_quaternion"]
+                # Pad remaining primitives with zeros
+                for jj in range(num_primitives, max_primitives):
+                    start_tool_dims[ii, jj, :] = [0, 0, 0]
+                    start_tool_offset[ii, jj, :] = [0, 0, 0]
+                    start_tool_quat[ii, jj, :] = [1, 0, 0, 0]
             else:
-                start_tool_dims[ii, :] = [0, 0, 0]
-                start_tool_offset[ii, :] = [0, 0, 0]
-                start_tool_quat[ii, :] = [1, 0, 0, 0]
+                start_tool_num_primitives[ii] = 0
+                for jj in range(max_primitives):
+                    start_tool_dims[ii, jj, :] = [0, 0, 0]
+                    start_tool_offset[ii, jj, :] = [0, 0, 0]
+                    start_tool_quat[ii, jj, :] = [1, 0, 0, 0]
 
             target_tool = getattr(results[ii].target_candidate, 'tool', None)
-            if target_tool is not None:
-                target_tool_dims[ii, :] = target_tool.dims
-                target_tool_offset[ii, :] = target_tool.offset
-                target_tool_quat[ii, :] = target_tool.offset_quaternion
+            if target_tool is not None and hasattr(target_tool, 'primitives') and target_tool.primitives:
+                num_primitives = len(target_tool.primitives)
+                target_tool_num_primitives[ii] = num_primitives
+                for jj, primitive in enumerate(target_tool.primitives):
+                    target_tool_dims[ii, jj, :] = primitive["dims"]
+                    target_tool_offset[ii, jj, :] = primitive["offset"]
+                    target_tool_quat[ii, jj, :] = primitive["offset_quaternion"]
+                # Pad remaining primitives with zeros
+                for jj in range(num_primitives, max_primitives):
+                    target_tool_dims[ii, jj, :] = [0, 0, 0]
+                    target_tool_offset[ii, jj, :] = [0, 0, 0]
+                    target_tool_quat[ii, jj, :] = [1, 0, 0, 0]
             else:
-                target_tool_dims[ii, :] = [0, 0, 0]
-                target_tool_offset[ii, :] = [0, 0, 0]
-                target_tool_quat[ii, :] = [1, 0, 0, 0]
+                target_tool_num_primitives[ii] = 0
+                for jj in range(max_primitives):
+                    target_tool_dims[ii, jj, :] = [0, 0, 0]
+                    target_tool_offset[ii, jj, :] = [0, 0, 0]
+                    target_tool_quat[ii, jj, :] = [1, 0, 0, 0]
 
 
 def gen():
@@ -559,6 +592,9 @@ def gen():
     max_cylinders = 0
     max_cuboids = 0
     total_trajectories = 0
+    
+    # Find maximum number of tool primitives across all files
+    max_tool_primitives = 0
     for fi in all_files:
         with h5py.File(fi) as f:
             total_trajectories += len(f["global_solutions"])
@@ -568,6 +604,12 @@ def gen():
                 max_cuboids = num_cuboids
             if num_cylinders > max_cylinders:
                 max_cylinders = num_cylinders
+            
+            # Check tool primitives if they exist in the file
+            if "start_tool_dims" in f:
+                max_in_file = f["start_tool_dims"].shape[1]
+                if max_in_file > max_tool_primitives:
+                    max_tool_primitives = max_in_file
 
     with h5py.File(f"{FINAL_DATA_DIR}/all_data.hdf5", "w-") as f:
         global_solutions = f.create_dataset(
@@ -596,13 +638,16 @@ def gen():
             "cylinder_quaternions", (total_trajectories, max_cylinders, 4)
         )
         
-        # Tool info datasets (for both start and target candidates)
-        start_tool_dims = f.create_dataset("start_tool_dims", (total_trajectories, 3))
-        start_tool_offset = f.create_dataset("start_tool_offset", (total_trajectories, 3))
-        start_tool_quat = f.create_dataset("start_tool_quaternion", (total_trajectories, 4))
-        target_tool_dims = f.create_dataset("target_tool_dims", (total_trajectories, 3))
-        target_tool_offset = f.create_dataset("target_tool_offset", (total_trajectories, 3))
-        target_tool_quat = f.create_dataset("target_tool_quaternion", (total_trajectories, 4))
+        # Tool info datasets (for both start and target candidates) - updated for composite tools
+        start_tool_dims = f.create_dataset("start_tool_dims", (total_trajectories, max_tool_primitives, 3))
+        start_tool_offset = f.create_dataset("start_tool_offset", (total_trajectories, max_tool_primitives, 3))
+        start_tool_quat = f.create_dataset("start_tool_quaternion", (total_trajectories, max_tool_primitives, 4))
+        start_tool_num_primitives = f.create_dataset("start_tool_num_primitives", (total_trajectories,))
+
+        target_tool_dims = f.create_dataset("target_tool_dims", (total_trajectories, max_tool_primitives, 3))
+        target_tool_offset = f.create_dataset("target_tool_offset", (total_trajectories, max_tool_primitives, 3))
+        target_tool_quat = f.create_dataset("target_tool_quaternion", (total_trajectories, max_tool_primitives, 4))
+        target_tool_num_primitives = f.create_dataset("target_tool_num_primitives", (total_trajectories,))
 
         chunk_start = 0
         chunk_end = 0
@@ -630,36 +675,56 @@ def gen():
                     cylinder_quats[idx, :num_cylinders, ...] = g[
                         "cylinder_quaternions"
                     ][...]
-                    # Tool info
-                    start_tool_dims[idx, :] = g["start_tool_dims"][idx-chunk_start, :]
-                    start_tool_offset[idx, :] = g["start_tool_offset"][idx-chunk_start, :]
-                    start_tool_quat[idx, :] = g["start_tool_quaternion"][idx-chunk_start, :]
-                    target_tool_dims[idx, :] = g["target_tool_dims"][idx-chunk_start, :]
-                    target_tool_offset[idx, :] = g["target_tool_offset"][idx-chunk_start, :]
-                    target_tool_quat[idx, :] = g["target_tool_quaternion"][idx-chunk_start, :]
+                    
+                    # Tool info - updated for composite tools
+                    local_idx = idx - chunk_start
+                    
+                    # Start tool data
+                    if "start_tool_dims" in g:
+                        num_start_primitives = int(g["start_tool_num_primitives"][local_idx])  # Convert to int
+                        start_tool_num_primitives[idx] = num_start_primitives
+                        if num_start_primitives > 0:
+                            start_tool_dims[idx, :num_start_primitives, :] = g["start_tool_dims"][local_idx, :num_start_primitives, :]
+                            start_tool_offset[idx, :num_start_primitives, :] = g["start_tool_offset"][local_idx, :num_start_primitives, :]
+                            start_tool_quat[idx, :num_start_primitives, :] = g["start_tool_quaternion"][local_idx, :num_start_primitives, :]
+                        # Pad with zeros if necessary
+                        if num_start_primitives < max_tool_primitives:
+                            start_tool_dims[idx, num_start_primitives:, :] = 0
+                            start_tool_offset[idx, num_start_primitives:, :] = 0
+                            start_tool_quat[idx, num_start_primitives:, :] = [1, 0, 0, 0]
+                    else:
+                        # Handle case where tool data doesn't exist (backward compatibility)
+                        start_tool_num_primitives[idx] = 0
+                        start_tool_dims[idx, :, :] = 0
+                        start_tool_offset[idx, :, :] = 0
+                        start_tool_quat[idx, :, :] = [1, 0, 0, 0]
+                    
+                    # Target tool data
+                    if "target_tool_dims" in g:
+                        num_target_primitives = int(g["target_tool_num_primitives"][local_idx])  # Convert to int
+                        target_tool_num_primitives[idx] = num_target_primitives
+                        if num_target_primitives > 0:
+                            target_tool_dims[idx, :num_target_primitives, :] = g["target_tool_dims"][local_idx, :num_target_primitives, :]
+                            target_tool_offset[idx, :num_target_primitives, :] = g["target_tool_offset"][local_idx, :num_target_primitives, :]
+                            target_tool_quat[idx, :num_target_primitives, :] = g["target_tool_quaternion"][local_idx, :num_target_primitives, :]
+                        # Pad with zeros if necessary
+                        if num_target_primitives < max_tool_primitives:
+                            target_tool_dims[idx, num_target_primitives:, :] = 0
+                            target_tool_offset[idx, num_target_primitives:, :] = 0
+                            target_tool_quat[idx, num_target_primitives:, :] = [1, 0, 0, 0]
+                    else:
+                        # Handle case where tool data doesn't exist (backward compatibility)
+                        target_tool_num_primitives[idx] = 0
+                        target_tool_dims[idx, :, :] = 0
+                        target_tool_offset[idx, :, :] = 0
+                        target_tool_quat[idx, :, :] = [1, 0, 0, 0]
                     
             chunk_start = chunk_end
+            
+    # Clean up temporary files
     for fi in all_files:
         fi.unlink()
-
-
-def visualize_single_env():
-    print(colored("Visualizing a single environment", "green"))
-    env, results = gen_single_env_data()
-    print(f"Generated {len(results)} results in environment {ENV_TYPE}")
-    if len(results) == 0:
-        print("Found no results")
-        return
-    sim = Bullet(gui=True)
-    robot = sim.load_robot(FrankaRobot)
-    sim.load_primitives(env.obstacles)
-    for r in results:
-        print("Visualizing global solution")
-        for q in r.global_solution:
-            robot.marionette(q)
-            time.sleep(0.1)
-        time.sleep(0.2)
-
+        
 
 def generate_free_space_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
@@ -709,8 +774,7 @@ def generate_free_space_inference_data(
 
     with open(save_path, "wb") as f:
         pickle.dump({ENV_TYPE: {"free_space": inference_problems}}, f)
-
-    
+ 
 def generate_task_oriented_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
 ):
@@ -732,6 +796,7 @@ def generate_task_oriented_inference_data(
                     plan, _ = solve_global_plan(
                         result.start_candidate,
                         result.target_candidate,
+                        result.attached_tools,
                         result.cuboids + result.cylinders,
                         selfcc,
                     )
@@ -753,14 +818,14 @@ def generate_task_oriented_inference_data(
                         obstacles=result.cuboids + result.cylinders,
                         target_volume=target_volume,
                         target_negative_volumes=result.target_candidate.negative_volumes,
+                        tool=result.attached_tools,
                     )
                 )
                 pbar.update(1)
 
     with open(save_path, "wb") as f:
         pickle.dump({ENV_TYPE: {"task_oriented": inference_problems}}, f)
-        
-        
+               
 def generate_neutral_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
 ):
@@ -801,6 +866,7 @@ def generate_neutral_inference_data(
                     plan, _ = solve_global_plan(
                         result.start_candidate,
                         result.target_candidate,
+                        result.attached_tools,
                         result.cuboids + result.cylinders,
                         selfcc,
                     )
@@ -822,6 +888,7 @@ def generate_neutral_inference_data(
                         obstacles=result.cuboids + result.cylinders,
                         target_volume=target_volume,
                         target_negative_volumes=result.target_candidate.negative_volumes,
+                        tool=result.attached_tools,
                     )
                 )
                 pbar.update(1)
