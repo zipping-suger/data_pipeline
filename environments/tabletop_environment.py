@@ -477,8 +477,8 @@ class TabletopEnvironment(Environment):
             for its constituent primitives to create more variety. It can now also generate
             simple, single-primitive tools like a bar, driller, or box.
             """
-            # tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller"])
-            tool_type = np.random.choice(["U_shape"])
+            tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller"])
+            # tool_type = np.random.choice(["U_shape"])
             primitives = []
 
             # Helper to create small random rotations
