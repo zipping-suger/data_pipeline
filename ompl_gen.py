@@ -49,9 +49,9 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 600  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 25  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
-    98  # The number of total candidate start or goals to use to plan experts
+    8  # The number of total candidate start or goals to use to plan experts
 )
 PIPELINE_TIMEOUT = 36000  # 10 hours in seconds--after which all new scenes will immediately return nothing
 
@@ -774,6 +774,7 @@ def generate_free_space_inference_data(
 
     with open(save_path, "wb") as f:
         pickle.dump({ENV_TYPE: {"free_space": inference_problems}}, f)
+ 
  
 def generate_task_oriented_inference_data(
     expert_pipeline: str, how_many: int, save_path: str
