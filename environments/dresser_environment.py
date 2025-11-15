@@ -25,6 +25,7 @@ from data_pipeline.environments.base_environment import (
     Environment,
     radius_sample,
     Tool,
+    SO3
 )
 
 
@@ -696,6 +697,8 @@ class DresserEnvironment(Environment):
         def random_tool_rotation_quat():
             rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
             return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
+        
+        scale_size = 0.7
 
         # Generate a single random rotation for the entire tool (for composite tools)
         tool_rotation_quat = random_tool_rotation_quat()
@@ -704,10 +707,10 @@ class DresserEnvironment(Environment):
             stem_dims = [
                 np.random.uniform(0.025, 0.035),
                 np.random.uniform(0.025, 0.035),
-                np.random.uniform(0.08, 0.12),
+                np.random.uniform(0.08, 0.12) * scale_size,
             ]
             bar_dims = [
-                np.random.uniform(0.12, 0.18),
+                np.random.uniform(0.12, 0.18) * scale_size,
                 np.random.uniform(0.025, 0.035),
                 np.random.uniform(0.025, 0.035),
             ]
@@ -732,10 +735,10 @@ class DresserEnvironment(Environment):
             vert_dims = [
                 np.random.uniform(0.025, 0.035),
                 np.random.uniform(0.025, 0.035),
-                np.random.uniform(0.08, 0.12),
+                np.random.uniform(0.08, 0.12) * scale_size,
             ]
             horiz_dims = [
-                np.random.uniform(0.07, 0.1),
+                np.random.uniform(0.07, 0.1) * scale_size,
                 np.random.uniform(0.025, 0.035),
                 np.random.uniform(0.025, 0.035),
             ]
@@ -758,14 +761,14 @@ class DresserEnvironment(Environment):
 
         elif tool_type == "U_shape":
             base_dims = [
-                np.random.uniform(0.1, 0.2),
+                np.random.uniform(0.1, 0.2) * scale_size,
                 np.random.uniform(0.025, 0.035),
                 np.random.uniform(0.025, 0.035),
             ]
             arm_dims = [
                 np.random.uniform(0.025, 0.035),
                 np.random.uniform(0.025, 0.035),
-                np.random.uniform(0.05, 0.1),
+                np.random.uniform(0.05, 0.1) * scale_size,
             ]
             base_width = base_dims[0]
             primitives = [
@@ -796,7 +799,7 @@ class DresserEnvironment(Environment):
         
         elif tool_type == "bar":
             bar_dims = [
-                np.random.uniform(0.15, 0.20),
+                np.random.uniform(0.15, 0.20) * scale_size,
                 np.random.uniform(0.03, 0.04),
                 np.random.uniform(0.03, 0.04),
             ]
@@ -810,7 +813,7 @@ class DresserEnvironment(Environment):
             drill_dims = [
                 np.random.uniform(0.02, 0.025),
                 np.random.uniform(0.02, 0.025),
-                np.random.uniform(0.18, 0.25),
+                np.random.uniform(0.18, 0.25) * scale_size,
             ]
             primitives = [{
                 "dims": drill_dims,
@@ -820,9 +823,9 @@ class DresserEnvironment(Environment):
             
         elif tool_type == "box":
             box_dims = [
-                np.random.uniform(0.05, 0.2),
+                np.random.uniform(0.05, 0.2) * scale_size,
                 np.random.uniform(0.01, 0.04),
-                np.random.uniform(0.05, 0.2),
+                np.random.uniform(0.05, 0.2) * scale_size,
             ]
             primitives = [{
                 "dims": box_dims,
