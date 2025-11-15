@@ -33,7 +33,7 @@ for ENV in "${ENVS[@]}"; do
   for TYPE in "${!TASKS[@]}"; do
     OUTDIR="${TASKS[$TYPE]}"
     OUTPUT_PATH="${DATA_SAVE_DIR}${OUTDIR}/"
-    HOST_OUTPUT_DIR="${RAW_DIR}/${ENV}_tasks/${OUTDIR}"
+    HOST_OUTPUT_DIR="${RAW_DIR}/${ENV}_tool/${OUTDIR}"
     
     echo "=== Running $ENV environment - $TYPE task (Output: $OUTPUT_PATH) ==="
     
