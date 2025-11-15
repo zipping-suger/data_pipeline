@@ -1,3 +1,4 @@
+# cubby_environment.py
 from dataclasses import dataclass
 import random
 from typing import List, Optional, Tuple
@@ -18,6 +19,8 @@ from data_pipeline.environments.base_environment import (
     FreeSpaceCandidate,
     Environment,
     radius_sample,
+    Tool,
+    SO3
 )
 
 
@@ -29,8 +32,8 @@ class CubbyCandidate(TaskOrientedCandidate):
     inside that cubby)
     """
 
-    pocket_idx: int
-    support_volume: Cuboid
+    pocket_idx: int = 0
+    support_volume: Cuboid = None
 
 
 class Cubby:
@@ -41,32 +44,17 @@ class Cubby:
     def __init__(self):
         self.cubby_left = radius_sample(0.7, 0.1)
         self.cubby_right = radius_sample(-0.7, 0.1)
-        self.cubby_bottom = radius_sample(0.2, 0.1)
+        self.cubby_bottom = radius_sample(0.1, 0.1)
         self.cubby_front = radius_sample(0.55, 0.1)
-        self.cubby_back = self.cubby_front + radius_sample(0.35, 0.2)
-        self.cubby_top = radius_sample(0.7, 0.1)
-        self.cubby_mid_h_z = radius_sample(0.45, 0.1)
+        self.cubby_back = self.cubby_front + radius_sample(0.4, 0.2)
+        self.cubby_top = radius_sample(0.8, 0.1)
+        self.cubby_mid_h_z = radius_sample(0.45, 0.2)
         self.cubby_mid_v_y = radius_sample(0.0, 0.1)
         self.thickness = radius_sample(0.02, 0.01)
         self.middle_shelf_thickness = self.thickness
         self.center_wall_thickness = self.thickness
         self.in_cabinet_rotation = radius_sample(0, np.pi / 18)
-      
-        # # Let's make a fixed cubby for now 
-        # self.cubby_left = 0.7
-        # self.cubby_right = -0.7
-        # self.cubby_bottom = 0.2
-        # self.cubby_front = 0.55
-        # self.cubby_back = self.cubby_front + 0.35
-        # self.cubby_top = 0.7
-        # self.cubby_mid_h_z = 0.45
-        # self.cubby_mid_v_y = 0.0
-        # self.thickness = 0.02
-        # self.middle_shelf_thickness = self.thickness
-        # self.center_wall_thickness = self.thickness
-        # self.in_cabinet_rotation = 0.0
-    
-
+          
     @property
     def rotation_matrix(self) -> np.ndarray:
         """
@@ -429,7 +417,7 @@ class CubbyEnvironment(Environment):
     def __init__(self):
         super().__init__()
         self.demo_candidates = []
-        pass
+        self._tools = None
 
     def _gen(self, selfcc: FrankaSelfCollisionChecker) -> bool:
         """
@@ -440,6 +428,7 @@ class CubbyEnvironment(Environment):
         :rtype bool: Whether the environment was successfully generated
         """
         self.cubby = Cubby()
+        self.generate_tool()
         support_idxs = np.arange(len(self.cubby.support_volumes))
         random.shuffle(support_idxs)
         supports = self.cubby.support_volumes
@@ -485,6 +474,7 @@ class CubbyEnvironment(Environment):
                 pocket_idx=idx,
                 support_volume=start_support_volume,
                 negative_volumes=[s for ii, s in enumerate(supports) if ii != idx],
+                tool=self._tools,
             ),
             CubbyCandidate(
                 pose=target_pose,
@@ -492,6 +482,7 @@ class CubbyEnvironment(Environment):
                 pocket_idx=jdx,
                 support_volume=target_support_volume,
                 negative_volumes=[s for ii, s in enumerate(supports) if ii != jdx],
+                tool=self._tools,
             ),
         )
         return True
@@ -534,6 +525,12 @@ class CubbyEnvironment(Environment):
                 z=z,
             )
             gripper.marionette(pose)
+            
+            # Check tool collision
+            if self._check_tool_collision(pose, self.obstacles, self._tools):
+                pose = None
+                continue
+                
             if sim.in_collision(gripper):
                 pose = None
                 continue
@@ -541,7 +538,6 @@ class CubbyEnvironment(Environment):
             if q is not None:
                 break
         return pose, q
-
 
     def _gen_free_space_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker
@@ -591,6 +587,10 @@ class CubbyEnvironment(Environment):
             if sim.in_collision(gripper):
                 continue
 
+            # Check tool collision
+            if self._check_tool_collision(pose, self.obstacles, self._tools):
+                continue
+
             # Solve IK
             q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=5)
             if q is not None:
@@ -603,6 +603,7 @@ class CubbyEnvironment(Environment):
                             config=q,
                             pose=pose,
                             negative_volumes=self.cubby.support_volumes,
+                            tool=self._tools,
                         )
                     )
         return candidates
@@ -635,13 +636,16 @@ class CubbyEnvironment(Environment):
                 pose = FrankaRealRobot.fk(sample, eff_frame="right_gripper")
                 gripper.marionette(pose)
                 if not sim.in_collision(gripper):
-                    candidates.append(
-                        NeutralCandidate(
-                            config=sample,
-                            pose=pose,
-                            negative_volumes=self.cubby.support_volumes,
+                    # Check tool collision
+                    if not self._check_tool_collision(pose, self.obstacles, self._tools):
+                        candidates.append(
+                            NeutralCandidate(
+                                config=sample,
+                                pose=pose,
+                                negative_volumes=self.cubby.support_volumes,
+                                tool=self._tools,
+                            )
                         )
-                    )
         return candidates
 
     def _gen_additional_candidate_sets(
@@ -681,11 +685,160 @@ class CubbyEnvironment(Environment):
                             pocket_idx=candidate.pocket_idx,
                             support_volume=candidate.support_volume,
                             negative_volumes=candidate.negative_volumes,
+                            tool=self._tools,
                         )
                     )
                     ii += 1
             candidate_sets.append(candidate_set)
         return candidate_sets
+
+    def generate_tool(self):
+        """
+        Generates a complex tool shape with randomized dimensions, offsets, and orientations
+        for its constituent primitives to create more variety.
+        """
+        tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        primitives = []
+
+        # Helper to create small random rotations for the entire tool
+        def random_tool_rotation_quat():
+            rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
+            return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
+
+        # Generate a single random rotation for the entire tool (for composite tools)
+        tool_rotation_quat = random_tool_rotation_quat()
+
+        if tool_type == "T_shape":
+            stem_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            bar_dims = [
+                np.random.uniform(0.12, 0.18),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical stem
+                    "dims": stem_dims,
+                    "offset": [0, 0, stem_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+                { # Horizontal bar
+                    "dims": bar_dims,
+                    "offset": [
+                        np.random.uniform(-0.01, 0.01),
+                        np.random.uniform(-0.01, 0.01),
+                        stem_dims[2] + bar_dims[2] / 2 - 0.01,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+            ]
+
+        elif tool_type == "L_shape":
+            vert_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            horiz_dims = [
+                np.random.uniform(0.07, 0.1),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical part
+                    "dims": vert_dims,
+                    "offset": [0, 0, vert_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+                { # Horizontal extension
+                    "dims": horiz_dims,
+                    "offset": [
+                        horiz_dims[0] / 2 - 0.01,
+                        0,
+                        vert_dims[2] - horiz_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+            ]
+
+        elif tool_type == "U_shape":
+            base_dims = [
+                np.random.uniform(0.1, 0.2),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            arm_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.05, 0.1),
+            ]
+            base_width = base_dims[0]
+            primitives = [
+                { # Base
+                    "dims": base_dims,
+                    "offset": [0, 0, 0],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+                { # Left arm
+                    "dims": arm_dims,
+                    "offset": [
+                        -base_width / 2 + arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+                { # Right arm
+                    "dims": arm_dims,
+                    "offset": [
+                        base_width / 2 - arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,
+                },
+            ]
+        
+        elif tool_type == "bar":
+            bar_dims = [
+                np.random.uniform(0.15, 0.20),
+                np.random.uniform(0.03, 0.04),
+                np.random.uniform(0.03, 0.04),
+            ]
+            primitives = [{
+                "dims": bar_dims,
+                "offset": [0, 0, bar_dims[1] / 2],
+                "offset_quaternion": tool_rotation_quat,
+            }]
+
+        elif tool_type == "driller":
+            drill_dims = [
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.18, 0.25),
+            ]
+            primitives = [{
+                "dims": drill_dims,
+                "offset": [0, 0, drill_dims[2] / 2],
+                "offset_quaternion": tool_rotation_quat,
+            }]
+            
+        elif tool_type == "box":
+            box_dims = [
+                np.random.uniform(0.05, 0.2),
+                np.random.uniform(0.01, 0.04),
+                np.random.uniform(0.05, 0.2),
+            ]
+            primitives = [{
+                "dims": box_dims,
+                "offset": [0, 0, box_dims[2] / 2],
+                "offset_quaternion": tool_rotation_quat,
+            }]
+
+        self._tools = Tool(primitive_type="composite", primitives=primitives)
 
     @property
     def obstacles(self) -> List[Cuboid]:

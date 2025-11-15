@@ -472,149 +472,153 @@ class TabletopEnvironment(Environment):
         )
         
     def generate_tool(self):
-            """
-            Generates a complex tool shape with randomized dimensions, offsets, and orientations
-            for its constituent primitives to create more variety. It can now also generate
-            simple, single-primitive tools like a bar, driller, or box.
-            """
-            tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller"])
-            # tool_type = np.random.choice(["U_shape"])
-            primitives = []
+        """
+        Generates a complex tool shape with randomized dimensions, offsets, and orientations
+        for its constituent primitives to create more variety. It can now also generate
+        simple, single-primitive tools like a bar, driller, or box.
+        """
+        tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        primitives = []
 
-            # Helper to create small random rotations
-            def random_rotation_quat():
-                rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
-                # CORRECTED LINE: Changed .coeffs to .quaternion
-                return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
+        # Helper to create small random rotations for the entire tool
+        def random_tool_rotation_quat():
+            rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
+            return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
 
-            if tool_type == "T_shape":
-                stem_dims = [
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.08, 0.12),
-                ]
-                bar_dims = [
-                    np.random.uniform(0.12, 0.18),
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.025, 0.035),
-                ]
-                primitives = [
-                    { # Vertical stem
-                        "dims": stem_dims,
-                        "offset": [0, 0, stem_dims[2] / 2],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                    { # Horizontal bar
-                        "dims": bar_dims,
-                        "offset": [
-                            np.random.uniform(-0.01, 0.01),
-                            np.random.uniform(-0.01, 0.01),
-                            stem_dims[2] + bar_dims[2] / 2 - 0.01,
-                        ],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                ]
+        # Generate a single random rotation for the entire tool (for composite tools)
+        tool_rotation_quat = random_tool_rotation_quat()
 
-            elif tool_type == "L_shape":
-                vert_dims = [
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.08, 0.12),
-                ]
-                horiz_dims = [
-                    np.random.uniform(0.07, 0.1),
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.025, 0.035),
-                ]
-                primitives = [
-                    { # Vertical part
-                        "dims": vert_dims,
-                        "offset": [0, 0, vert_dims[2] / 2],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                    { # Horizontal extension
-                        "dims": horiz_dims,
-                        "offset": [
-                            horiz_dims[0] / 2 - 0.01,
-                            0,
-                            vert_dims[2] - horiz_dims[2] / 2,
-                        ],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                ]
-
-            elif tool_type == "U_shape":
-                base_dims = [
-                    np.random.uniform(0.1, 0.2),
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.025, 0.035),
-                ]
-                arm_dims = [
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.025, 0.035),
-                    np.random.uniform(0.05, 0.1),
-                ]
-                base_width = base_dims[0]
-                primitives = [
-                    { # Base
-                        "dims": base_dims,
-                        "offset": [0, 0, 0],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                    { # Left arm
-                        "dims": arm_dims,
-                        "offset": [
-                            -base_width / 2 + arm_dims[0] / 2,
-                            0,
-                            arm_dims[2] / 2,
-                        ],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                    { # Right arm
-                        "dims": arm_dims,
-                        "offset": [
-                            base_width / 2 - arm_dims[0] / 2,
-                            0,
-                            arm_dims[2] / 2,
-                        ],
-                        "offset_quaternion": random_rotation_quat(),
-                    },
-                ]
-            
-            elif tool_type == "bar":
-                bar_dims = [
-                    np.random.uniform(0.15, 0.20),
-                    np.random.uniform(0.03, 0.04),
-                    np.random.uniform(0.03, 0.04),
-                ]
-                primitives = [{
+        if tool_type == "T_shape":
+            stem_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            bar_dims = [
+                np.random.uniform(0.12, 0.18),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical stem
+                    "dims": stem_dims,
+                    "offset": [0, 0, stem_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Horizontal bar
                     "dims": bar_dims,
-                    "offset": [0, 0, bar_dims[1] / 2],
-                    "offset_quaternion": [1, 0, 0, 0],
-                }]
+                    "offset": [
+                        np.random.uniform(-0.01, 0.01),
+                        np.random.uniform(-0.01, 0.01),
+                        stem_dims[2] + bar_dims[2] / 2 - 0.01,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
 
-            elif tool_type == "driller":
-                drill_dims = [
-                    np.random.uniform(0.02, 0.025),
-                    np.random.uniform(0.02, 0.025),
-                    np.random.uniform(0.18, 0.25),
-                ]
-                primitives = [{
-                    "dims": drill_dims,
-                    "offset": [0, 0, drill_dims[2] / 2],
-                    "offset_quaternion": [1, 0, 0, 0],
-                }]
-                
-            elif tool_type == "box":
-                box_side = np.random.uniform(0.06, 0.09)
-                box_dims = [box_side, box_side, box_side]
-                primitives = [{
-                    "dims": box_dims,
-                    "offset": [0, 0, box_dims[2] / 2],
-                    "offset_quaternion": [1, 0, 0, 0],
-                }]
+        elif tool_type == "L_shape":
+            vert_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            horiz_dims = [
+                np.random.uniform(0.07, 0.1),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical part
+                    "dims": vert_dims,
+                    "offset": [0, 0, vert_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Horizontal extension
+                    "dims": horiz_dims,
+                    "offset": [
+                        horiz_dims[0] / 2 - 0.01,
+                        0,
+                        vert_dims[2] - horiz_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
 
-            self._tools = Tool(primitive_type="composite", primitives=primitives)
+        elif tool_type == "U_shape":
+            base_dims = [
+                np.random.uniform(0.1, 0.2),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            arm_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.05, 0.1),
+            ]
+            base_width = base_dims[0]
+            primitives = [
+                { # Base
+                    "dims": base_dims,
+                    "offset": [0, 0, 0],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Left arm
+                    "dims": arm_dims,
+                    "offset": [
+                        -base_width / 2 + arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Right arm
+                    "dims": arm_dims,
+                    "offset": [
+                        base_width / 2 - arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+        
+        elif tool_type == "bar":
+            bar_dims = [
+                np.random.uniform(0.15, 0.20),
+                np.random.uniform(0.03, 0.04),
+                np.random.uniform(0.03, 0.04),
+            ]
+            primitives = [{
+                "dims": bar_dims,
+                "offset": [0, 0, bar_dims[1] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to bar too
+            }]
+
+        elif tool_type == "driller":
+            drill_dims = [
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.18, 0.25),
+            ]
+            primitives = [{
+                "dims": drill_dims,
+                "offset": [0, 0, drill_dims[2] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to driller too
+            }]
+            
+        elif tool_type == "box":
+            box_dims = [
+                np.random.uniform(0.05, 0.2),
+                np.random.uniform(0.01, 0.04),
+                np.random.uniform(0.05, 0.2),
+            ]
+            primitives = [{
+                "dims": box_dims,
+                "offset": [0, 0, box_dims[2] / 2],
+                "offset_quaternion": [1, 0, 0, 0],  # Apply rotation to box too
+            }]
+
+        self._tools = Tool(primitive_type="composite", primitives=primitives)
         
     def random_object(
         self, x: float, y: float, table_top: float, dim_min: float, dim_max: float

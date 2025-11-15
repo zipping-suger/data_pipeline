@@ -24,6 +24,7 @@ from data_pipeline.environments.base_environment import (
     FreeSpaceCandidate,
     Environment,
     radius_sample,
+    Tool,
 )
 
 
@@ -35,8 +36,9 @@ class DresserCandidate(TaskOrientedCandidate):
     inside that drawer)
     """
 
-    drawer_idx: int
-    support_volume: Cuboid
+    drawer_idx: int = 0
+    support_volume: Optional[Cuboid] = None
+    tool: Optional[Tool] = None
 
 
 @dataclass
@@ -53,6 +55,15 @@ class Container:
     node_name: str
     transform: np.ndarray
     support_surface: Optional[SupportSurface] = None
+
+
+def random_linear_decrease():
+    """
+    Generates a random number according a distribution between 0 and 1 where the PDF looks
+    like a linear line with slope -1. Useful for generating numbers within a range where
+    the lower numbers are more preferred than the larger ones.
+    """
+    return 1 - np.sqrt(np.random.uniform())
 
 
 class DresserEnvironment(Environment):
@@ -91,6 +102,9 @@ class DresserEnvironment(Environment):
         gripper = sim.load_robot(FrankaGripper)
         arm = sim.load_robot(FrankaRobot)
 
+        # Generate tool for the environment
+        self.generate_tool()
+
         (
             start_pose,
             start_q,
@@ -108,8 +122,8 @@ class DresserEnvironment(Environment):
             start_support_volume = self.get_support_volume(idx_start)
             if start_support_volume is None:
                 continue
-            start_pose, start_q = self.random_pose_and_config(
-                sim, gripper, arm, selfcc, start_support_volume
+            start_pose, start_q = self.random_pose_and_config_with_tool(
+                sim, gripper, arm, selfcc, start_support_volume, self._tools
             )
             sim.clear_all_obstacles()
             if start_pose is None or start_q is None:
@@ -143,8 +157,8 @@ class DresserEnvironment(Environment):
                 (
                     target_pose,
                     target_q,
-                ) = self.random_pose_and_config(
-                    sim, gripper, arm, selfcc, target_support_volume
+                ) = self.random_pose_and_config_with_tool(
+                    sim, gripper, arm, selfcc, target_support_volume, self._tools
                 )
                 sim.clear_all_obstacles()
                 if target_pose is not None and target_q is not None:
@@ -164,6 +178,7 @@ class DresserEnvironment(Environment):
                 drawer_idx=idx_start,
                 support_volume=start_support_volume,
                 negative_volumes=[target_support_volume],
+                tool=self._tools
             ),
             DresserCandidate(
                 pose=target_pose,
@@ -171,6 +186,7 @@ class DresserEnvironment(Environment):
                 drawer_idx=idx_target,
                 support_volume=target_support_volume,
                 negative_volumes=[start_support_volume],
+                tool=self._tools
             ),
         ]
         return True
@@ -478,6 +494,50 @@ class DresserEnvironment(Environment):
                 break
         return pose, q
 
+    def random_pose_and_config_with_tool(
+        self,
+        sim: Bullet,
+        gripper: BulletFrankaGripper,
+        arm: BulletFranka,
+        selfcc: FrankaSelfCollisionChecker,
+        support_volume: Cuboid,
+        tool: Tool
+    ) -> Tuple[Optional[SE3], Optional[np.ndarray]]:
+        """
+        Modified version of random_pose_and_config that accounts for tool collision
+        """
+        samples = support_volume.sample_volume(100)
+
+        pose, q = None, None
+        for sample in samples:
+            # MODIFIED ORIENTATION SAMPLING: Avoid pointing tool into drawer surfaces
+            # Keep roll mostly downward-facing but with tighter bounds for drawer environments
+            roll = np.random.uniform(4 * np.pi / 5, 6 * np.pi / 5)  # 144°-216°
+            
+            # Constrain pitch to avoid horizontal orientations that might collide with drawer sides
+            pitch = np.random.uniform(-np.pi / 12, np.pi / 12)  # ±15°
+            
+            # Yaw can be mostly free but avoid orientations where tool hits drawer sides
+            yaw = np.random.uniform(-np.pi / 2, np.pi / 2)
+            
+            pose = SE3(xyz=sample, so3=SO3.from_rpy(roll, pitch, yaw))
+            
+            # Check gripper collision
+            gripper.marionette(pose)
+            if sim.in_collision(gripper):
+                pose = None
+                continue
+                
+            # NEW: Check tool collision using the helper method from base environment
+            if self._check_tool_collision(pose, self.obstacles, tool):
+                pose = None
+                continue
+                
+            q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=1000)
+            if q is not None:
+                break
+        return pose, q
+
     def _gen_neutral_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker
     ) -> List[NeutralCandidate]:
@@ -498,15 +558,18 @@ class DresserEnvironment(Environment):
                 pose = FrankaRealRobot.fk(sample, eff_frame="right_gripper")
                 gripper.marionette(pose)
                 if not sim.in_collision(gripper):
-                    candidates.append(
-                        NeutralCandidate(
-                            config=sample,
-                            pose=pose,
-                            negative_volumes=[
-                                x.support_volume for x in self.demo_candidates
-                            ],
+                    # NEW: Check tool collision
+                    if not self._check_tool_collision(pose, self.obstacles, self._tools):
+                        candidates.append(
+                            NeutralCandidate(
+                                config=sample,
+                                pose=pose,
+                                negative_volumes=[
+                                    x.support_volume for x in self.demo_candidates
+                                ],
+                                tool=self._tools
+                            )
                         )
-                    )
         return candidates
 
     def _gen_free_space_candidates(
@@ -548,6 +611,10 @@ class DresserEnvironment(Environment):
             if sim.in_collision(gripper):
                 continue
 
+            # NEW: Check tool collision
+            if self._check_tool_collision(pose, self.obstacles, self._tools):
+                continue
+
             # Solve IK
             q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=50)
             if q is not None:
@@ -560,6 +627,7 @@ class DresserEnvironment(Environment):
                             config=q,
                             pose=pose,
                             negative_volumes=[],
+                            tool=self._tools
                         )
                     )
         return candidates
@@ -592,12 +660,13 @@ class DresserEnvironment(Environment):
             candidate_set: List[TaskOrientedCandidate] = []
             ii = 0
             while ii < how_many:
-                pose, q = self.random_pose_and_config(
+                pose, q = self.random_pose_and_config_with_tool(
                     sim,
                     gripper,
                     arm,
                     selfcc,
                     self.demo_candidates[idx].support_volume,
+                    self._tools
                 )
                 if pose is not None and q is not None:
                     candidate_set.append(
@@ -607,11 +676,161 @@ class DresserEnvironment(Environment):
                             drawer_idx=self.demo_candidates[idx].drawer_idx,
                             support_volume=self.demo_candidates[idx].support_volume,
                             negative_volumes=self.demo_candidates[idx].negative_volumes,
+                            tool=self._tools
                         )
                     )
                     ii += 1
             candidate_sets.append(candidate_set)
         return candidate_sets
+
+    def generate_tool(self):
+        """
+        Generates a complex tool shape with randomized dimensions, offsets, and orientations
+        for its constituent primitives to create more variety. It can now also generate
+        simple, single-primitive tools like a bar, driller, or box.
+        """
+        tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        primitives = []
+
+        # Helper to create small random rotations for the entire tool
+        def random_tool_rotation_quat():
+            rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
+            return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
+
+        # Generate a single random rotation for the entire tool (for composite tools)
+        tool_rotation_quat = random_tool_rotation_quat()
+
+        if tool_type == "T_shape":
+            stem_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            bar_dims = [
+                np.random.uniform(0.12, 0.18),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical stem
+                    "dims": stem_dims,
+                    "offset": [0, 0, stem_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Horizontal bar
+                    "dims": bar_dims,
+                    "offset": [
+                        np.random.uniform(-0.01, 0.01),
+                        np.random.uniform(-0.01, 0.01),
+                        stem_dims[2] + bar_dims[2] / 2 - 0.01,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+
+        elif tool_type == "L_shape":
+            vert_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            horiz_dims = [
+                np.random.uniform(0.07, 0.1),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical part
+                    "dims": vert_dims,
+                    "offset": [0, 0, vert_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Horizontal extension
+                    "dims": horiz_dims,
+                    "offset": [
+                        horiz_dims[0] / 2 - 0.01,
+                        0,
+                        vert_dims[2] - horiz_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+
+        elif tool_type == "U_shape":
+            base_dims = [
+                np.random.uniform(0.1, 0.2),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            arm_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.05, 0.1),
+            ]
+            base_width = base_dims[0]
+            primitives = [
+                { # Base
+                    "dims": base_dims,
+                    "offset": [0, 0, 0],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Left arm
+                    "dims": arm_dims,
+                    "offset": [
+                        -base_width / 2 + arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Right arm
+                    "dims": arm_dims,
+                    "offset": [
+                        base_width / 2 - arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+        
+        elif tool_type == "bar":
+            bar_dims = [
+                np.random.uniform(0.15, 0.20),
+                np.random.uniform(0.03, 0.04),
+                np.random.uniform(0.03, 0.04),
+            ]
+            primitives = [{
+                "dims": bar_dims,
+                "offset": [0, 0, bar_dims[1] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to bar too
+            }]
+
+        elif tool_type == "driller":
+            drill_dims = [
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.18, 0.25),
+            ]
+            primitives = [{
+                "dims": drill_dims,
+                "offset": [0, 0, drill_dims[2] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to driller too
+            }]
+            
+        elif tool_type == "box":
+            box_dims = [
+                np.random.uniform(0.05, 0.2),
+                np.random.uniform(0.01, 0.04),
+                np.random.uniform(0.05, 0.2),
+            ]
+            primitives = [{
+                "dims": box_dims,
+                "offset": [0, 0, box_dims[2] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to box too
+            }]
+
+        self._tools = Tool(primitive_type="composite", primitives=primitives)
 
     @property
     def obstacles(self) -> List[Cuboid]:

@@ -12,7 +12,7 @@ RAW_DIR="/cluster/home/yixili/raw_data"
 SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 
 # --- Environment and Task Definitions ---
-ENVS=("tabletop")
+ENVS=("cubby")
 
 declare -A TASKS=(
   [task-oriented]=task
@@ -28,7 +28,7 @@ echo "Starting Singularity container: $CONTAINER_IMAGE"
 
 for ENV in "${ENVS[@]}"; do
   # Update DATA_SAVE_DIR based on environment
-  DATA_SAVE_DIR="/raw_data/${ENV}_tasks/"
+  DATA_SAVE_DIR="/raw_data/${ENV}_tool/"
   
   for TYPE in "${!TASKS[@]}"; do
     OUTDIR="${TASKS[$TYPE]}"
