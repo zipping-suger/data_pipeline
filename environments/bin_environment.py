@@ -52,15 +52,16 @@ class BinEnvironment(Environment):
         # Removed object placement
         self.generate_tool()
 
-        cand1 = self.gen_candidate(selfcc, self.tools)
-        if cand1 is None:
+        # Generate one candidate outside the bin (near table) and one inside
+        cand_outside = self.gen_candidate_outside(selfcc, self.tools)
+        if cand_outside is None:
             return False
             
-        cand2 = self.gen_candidate(selfcc, self.tools)
-        if cand2 is None:
+        cand_inside = self.gen_candidate_inside(selfcc, self.tools)
+        if cand_inside is None:
             return False
             
-        self.demo_candidates = [cand1, cand2]
+        self.demo_candidates = [cand_outside, cand_inside]
         return True
 
     def setup_bin(self):
@@ -396,7 +397,7 @@ class BinEnvironment(Environment):
                     )
         return candidates
 
-    def gen_candidate(self, selfcc: FrankaSelfCollisionChecker, tool: Tool) -> Optional[TaskOrientedCandidate]:
+    def gen_candidate_inside(self, selfcc: FrankaSelfCollisionChecker, tool: Tool) -> Optional[TaskOrientedCandidate]:
         """
         Generate a candidate pose inside the bin.
         """
@@ -451,13 +452,231 @@ class BinEnvironment(Environment):
             negative_volumes=[],
             tool=tool
         )
+
+    def gen_candidate_outside(self, selfcc: FrankaSelfCollisionChecker, tool: Tool) -> Optional[TaskOrientedCandidate]:
+        """
+        Generate a candidate pose outside the bin but close to the table.
+        """
+        sim = Bullet(gui=False)
+        sim.load_primitives(self.obstacles)
+        gripper = sim.load_robot(FrankaGripper)
+        arm = sim.load_robot(FrankaRobot)
+            
+        q = None
+        pose = None
+        
+        # Get bin parameters for positioning
+        bin_center = self.bin_params['center']
+        bin_dims = self.bin_params['dims']
+        bin_rotation = self.bin_params['rotation']
+        
+        # Sample positions around the bin but on the table
+        for _ in range(100):
+            # Choose which side of the bin to place the candidate
+            side = np.random.choice(['front', 'back', 'left', 'right'])
+            
+            if side == 'front':
+                # In front of the bin (lower y)
+                x = bin_center[0] + np.random.uniform(-bin_dims[0]/2, bin_dims[0]/2)
+                y = bin_center[1] - bin_dims[1]/2 - np.random.uniform(0.1, 0.3)
+            elif side == 'back':
+                # Behind the bin (higher y)
+                x = bin_center[0] + np.random.uniform(-bin_dims[0]/2, bin_dims[0]/2)
+                y = bin_center[1] + bin_dims[1]/2 + np.random.uniform(0.1, 0.3)
+            elif side == 'left':
+                # Left of the bin (lower x)
+                x = bin_center[0] - bin_dims[0]/2 - np.random.uniform(0.1, 0.3)
+                y = bin_center[1] + np.random.uniform(-bin_dims[1]/2, bin_dims[1]/2)
+            else:  # right
+                # Right of the bin (higher x)
+                x = bin_center[0] + bin_dims[0]/2 + np.random.uniform(0.1, 0.3)
+                y = bin_center[1] + np.random.uniform(-bin_dims[1]/2, bin_dims[1]/2)
+            
+            # Z position - above the table but below bin top
+            table_height = self.clear_tables[0].center[2] + self.clear_tables[0].dims[2]/2
+            z = table_height + np.random.uniform(0.1, 0.3)
+            
+            position = np.array([x, y, z])
+            
+            roll = np.random.uniform(3 * np.pi / 4, 5 * np.pi / 4)
+            pitch = np.random.uniform(-np.pi / 8, np.pi / 8)
+            yaw = np.random.uniform(-np.pi / 2, np.pi / 2)
+            
+            pose = SE3(xyz=position, so3=SO3.from_rpy(roll, pitch, yaw))
+            
+            gripper.marionette(pose)
+
+            if self._check_tool_collision(pose, self.obstacles, tool):
+                continue
+            
+            if sim.in_collision(gripper):
+                continue
+                
+            q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=1000)
+            if q is not None:
+                break
+                
+        if pose is None or q is None:
+            return None
+            
+        return TaskOrientedCandidate(
+            pose=pose,
+            config=q,
+            negative_volumes=[],
+            tool=tool
+        )
+
+    def gen_candidate(self, selfcc: FrankaSelfCollisionChecker, tool: Tool) -> Optional[TaskOrientedCandidate]:
+        """
+        Generate a candidate pose (defaults to inside for backward compatibility).
+        """
+        return self.gen_candidate_inside(selfcc, tool)
         
     def generate_tool(self):
         """
-        Generate a tool for the bin environment (same as tabletop).
+        Generates a complex tool shape with randomized dimensions, offsets, and orientations
+        for its constituent primitives to create more variety. It can now also generate
+        simple, single-primitive tools like a bar, driller, or box.
         """
-        # Reuse the same tool generation as TabletopEnvironment
-        from data_pipeline.environments.tabletop_environment import TabletopEnvironment
-        temp_env = TabletopEnvironment()
-        temp_env.generate_tool()
-        self._tools = temp_env.tools
+        tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        primitives = []
+
+        # Helper to create small random rotations for the entire tool
+        def random_tool_rotation_quat():
+            rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
+            return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
+
+        # Generate a single random rotation for the entire tool (for composite tools)
+        tool_rotation_quat = random_tool_rotation_quat()
+
+        if tool_type == "T_shape":
+            stem_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            bar_dims = [
+                np.random.uniform(0.12, 0.18),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical stem
+                    "dims": stem_dims,
+                    "offset": [0, 0, stem_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Horizontal bar
+                    "dims": bar_dims,
+                    "offset": [
+                        np.random.uniform(-0.01, 0.01),
+                        np.random.uniform(-0.01, 0.01),
+                        stem_dims[2] + bar_dims[2] / 2 - 0.01,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+
+        elif tool_type == "L_shape":
+            vert_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.08, 0.12),
+            ]
+            horiz_dims = [
+                np.random.uniform(0.07, 0.1),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            primitives = [
+                { # Vertical part
+                    "dims": vert_dims,
+                    "offset": [0, 0, vert_dims[2] / 2],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Horizontal extension
+                    "dims": horiz_dims,
+                    "offset": [
+                        horiz_dims[0] / 2 - 0.01,
+                        0,
+                        vert_dims[2] - horiz_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+
+        elif tool_type == "U_shape":
+            base_dims = [
+                np.random.uniform(0.1, 0.2),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+            ]
+            arm_dims = [
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.025, 0.035),
+                np.random.uniform(0.05, 0.1),
+            ]
+            base_width = base_dims[0]
+            primitives = [
+                { # Base
+                    "dims": base_dims,
+                    "offset": [0, 0, 0],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Left arm
+                    "dims": arm_dims,
+                    "offset": [
+                        -base_width / 2 + arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+                { # Right arm
+                    "dims": arm_dims,
+                    "offset": [
+                        base_width / 2 - arm_dims[0] / 2,
+                        0,
+                        arm_dims[2] / 2,
+                    ],
+                    "offset_quaternion": tool_rotation_quat,  # Same rotation for all parts
+                },
+            ]
+        
+        elif tool_type == "bar":
+            bar_dims = [
+                np.random.uniform(0.15, 0.20),
+                np.random.uniform(0.03, 0.04),
+                np.random.uniform(0.03, 0.04),
+            ]
+            primitives = [{
+                "dims": bar_dims,
+                "offset": [0, 0, bar_dims[1] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to bar too
+            }]
+
+        elif tool_type == "driller":
+            drill_dims = [
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.02, 0.025),
+                np.random.uniform(0.18, 0.25),
+            ]
+            primitives = [{
+                "dims": drill_dims,
+                "offset": [0, 0, drill_dims[2] / 2],
+                "offset_quaternion": tool_rotation_quat,  # Apply rotation to driller too
+            }]
+            
+        elif tool_type == "box":
+            box_dims = [
+                np.random.uniform(0.05, 0.2),
+                np.random.uniform(0.01, 0.04),
+                np.random.uniform(0.05, 0.2),
+            ]
+            primitives = [{
+                "dims": box_dims,
+                "offset": [0, 0, box_dims[2] / 2],
+                "offset_quaternion": [1, 0, 0, 0],  # Apply rotation to box too
+            }]
+
+        self._tools = Tool(primitive_type="composite", primitives=primitives)
