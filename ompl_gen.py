@@ -50,6 +50,10 @@ from data_pipeline.environments.dresser_environment import (
     DresserEnvironment,
 )
 
+from data_pipeline.environments.bin_environment import (
+   BinEnvironment,
+) 
+
 
 from prob_types import PlanningProblem
 
@@ -59,7 +63,7 @@ from typing import Tuple, List, Union, Sequence, Optional, Any
 END_EFFECTOR_FRAME = "right_gripper"  # Used everywhere and is the default in robofin
 MAX_JERK = 0.15  # Used for validating the expert trajectories
 SEQUENCE_LENGTH = 50  # The final sequence length
-NUM_SCENES = 600  # The maximum number of scenes to generate in a single job
+NUM_SCENES = 800  # The maximum number of scenes to generate in a single job
 NUM_PLANS_PER_SCENE = (
     98  # The number of total candidate start or goals to use to plan experts
 )
@@ -441,6 +445,8 @@ def gen_valid_env(selfcc: FrankaSelfCollisionChecker) -> Environment:
         env = PillarEnvironment()
     elif ENV_TYPE == "cabinet":
         env = CabinetEnvironment()
+    elif ENV_TYPE == "bin":
+        env = BinEnvironment()
     else:
         raise NotImplementedError(f"{ENV_TYPE} not implemented as environment")
     success = False
@@ -1048,6 +1054,7 @@ if __name__ == "__main__":
             "cabinet",
             "merged-cubby",
             "dresser",
+            "bin",
         ],
         help="Include this argument if there are subtypes",
     )

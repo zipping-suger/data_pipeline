@@ -195,8 +195,8 @@ class DresserEnvironment(Environment):
     def _gen_dresser(self):
         # Generate dimensions
         width, depth, height = (
-            radius_sample(1.0, 0.2),
-            radius_sample(0.3, 0.1),
+            radius_sample(1.0, 0.3),
+            radius_sample(0.4, 0.2),
             radius_sample(0.7, 0.15),
         )
 
@@ -383,7 +383,7 @@ class DresserEnvironment(Environment):
                 support_surface=support_surface,
                 mesh=scene_mesh,
                 gravity=gravity,
-                ray_cast_count=10,
+                ray_cast_count=50,
                 min_volume=min_volume,
                 distance_above_support=distance_above_support,
                 max_height=10.0,
