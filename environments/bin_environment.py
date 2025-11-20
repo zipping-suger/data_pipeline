@@ -538,7 +538,8 @@ class BinEnvironment(Environment):
         for its constituent primitives to create more variety. It can now also generate
         simple, single-primitive tools like a bar, driller, or box.
         """
-        tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        # tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        tool_type = np.random.choice(["H_shape"])
         primitives = []
 
         # Helper to create small random rotations for the entire tool
@@ -678,5 +679,50 @@ class BinEnvironment(Environment):
                 "offset": [0, 0, box_dims[2] / 2],
                 "offset_quaternion": [1, 0, 0, 0],  # Apply rotation to box too
             }]
+            
+        elif tool_type == "H_shape":
+            # Middle connecting bar (held by robot)
+            middle_bar_dims = [
+                np.random.uniform(0.08, 0.12),  # Length (x-direction)
+                np.random.uniform(0.025, 0.035),  # Width (y-direction)
+                np.random.uniform(0.025, 0.035),  # Height (z-direction)
+            ]
+            
+            # Two parallel horizontal bars (rotated 90 degrees)
+            horizontal_bar_dims = [
+                np.random.uniform(0.025, 0.035),  # Length (x-direction) - now the long dimension
+                np.random.uniform(0.12, 0.18),  # Width (y-direction)
+                np.random.uniform(0.025, 0.035),  # Height (z-direction)
+            ]
+            
+            # Calculate positions for horizontal bars at ends of middle bar
+            left_x_offset =  middle_bar_dims[0] / 2 - horizontal_bar_dims[0] / 2
+            right_x_offset = - middle_bar_dims[0] / 2 + horizontal_bar_dims[0] / 2
+
+            primitives = [
+                { # Middle connecting bar (held by robot)
+                    "dims": middle_bar_dims,
+                    "offset": [0, 0, 0],  # Centered at origin
+                    "offset_quaternion": [1, 0, 0, 0],  # No rotation
+                },
+                { # Top horizontal bar 
+                    "dims": horizontal_bar_dims,
+                    "offset": [
+                        left_x_offset,
+                        0,  
+                        0,  
+                    ],
+                    "offset_quaternion": [1, 0, 0, 0],  # 90-degree rotation
+                },
+                { # Bottom horizontal bar
+                    "dims": horizontal_bar_dims,
+                    "offset": [
+                        right_x_offset,
+                        0,    
+                        0,  
+                    ],
+                    "offset_quaternion": [1, 0, 0, 0],  # 90-degree rotation
+                },
+            ]
 
         self._tools = Tool(primitive_type="composite", primitives=primitives)
