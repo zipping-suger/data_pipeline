@@ -496,48 +496,64 @@ class DresserEnvironment(Environment):
         return pose, q
 
     def random_pose_and_config_with_tool(
-        self,
-        sim: Bullet,
-        gripper: BulletFrankaGripper,
-        arm: BulletFranka,
-        selfcc: FrankaSelfCollisionChecker,
-        support_volume: Cuboid,
-        tool: Tool
-    ) -> Tuple[Optional[SE3], Optional[np.ndarray]]:
-        """
-        Modified version of random_pose_and_config that accounts for tool collision
-        """
-        samples = support_volume.sample_volume(100)
+            self,
+            sim: Bullet,
+            gripper: BulletFrankaGripper,
+            arm: BulletFranka,
+            selfcc: FrankaSelfCollisionChecker,
+            support_volume: Cuboid,
+            tool: Tool
+        ) -> Tuple[Optional[SE3], Optional[np.ndarray]]:
+            """
+            Modified version of random_pose_and_config that accounts for tool collision
+            """
+            samples = support_volume.sample_volume(100)
+            
+            # --- FIX 1: Shift samples up to account for tool length ---
+            # Calculate max tool extension in Z (gripper frame)
+            tool_length = 0.0
+            if tool is not None and hasattr(tool, 'primitives') and tool.primitives:
+                # Find the primitive that extends furthest in +Z (which points out of gripper)
+                tool_length = max([p["offset"][2] + p["dims"][2]/2 for p in tool.primitives])
+            
+            # Shift samples up by a portion of the tool length so the tool doesn't hit the drawer bottom immediately
+            # We use 0.9 * tool_length to be safe but maximize usable height
+            samples[:, 2] += (tool_length * 0.9)
+            # ----------------------------------------------------------
 
-        pose, q = None, None
-        for sample in samples:
-            # MODIFIED ORIENTATION SAMPLING: Avoid pointing tool into drawer surfaces
-            # Keep roll mostly downward-facing but with tighter bounds for drawer environments
-            roll = np.random.uniform(4 * np.pi / 5, 6 * np.pi / 5)  # 144°-216°
-            
-            # Constrain pitch to avoid horizontal orientations that might collide with drawer sides
-            pitch = np.random.uniform(-np.pi / 12, np.pi / 12)  # ±15°
-            
-            # Yaw can be mostly free but avoid orientations where tool hits drawer sides
-            yaw = np.random.uniform(-np.pi / 2, np.pi / 2)
-            
-            pose = SE3(xyz=sample, so3=SO3.from_rpy(roll, pitch, yaw))
-            
-            # Check gripper collision
-            gripper.marionette(pose)
-            if sim.in_collision(gripper):
-                pose = None
-                continue
+            pose, q = None, None
+            for sample in samples:
+                # MODIFIED ORIENTATION SAMPLING: Avoid pointing tool into drawer surfaces
+                # Keep roll mostly downward-facing but with tighter bounds for drawer environments
+                roll = np.random.uniform(4 * np.pi / 5, 6 * np.pi / 5)  # 144°-216°
                 
-            # NEW: Check tool collision using the helper method from base environment
-            if self._check_tool_collision(pose, self.obstacles, tool):
-                pose = None
-                continue
+                # Constrain pitch to avoid horizontal orientations that might collide with drawer sides
+                pitch = np.random.uniform(-np.pi / 12, np.pi / 12)  # ±15°
                 
-            q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=1000)
-            if q is not None:
-                break
-        return pose, q
+                # Yaw can be mostly free but avoid orientations where tool hits drawer sides
+                yaw = np.random.uniform(-np.pi / 2, np.pi / 2)
+                
+                pose = SE3(xyz=sample, so3=SO3.from_rpy(roll, pitch, yaw))
+                
+                # Check gripper collision
+                gripper.marionette(pose)
+                if sim.in_collision(gripper):
+                    pose = None
+                    continue
+                    
+                # NEW: Check tool collision using the helper method from base environment
+                if self._check_tool_collision(pose, self.obstacles, tool):
+                    pose = None
+                    continue
+                
+                # --- FIX 2: Reduce Retries ---
+                # Reduced retries from 1000 to 50. 
+                # If a pose is valid, IK usually succeeds quickly. 
+                # If it's hard, it's faster to sample a new pose than burn 1000 iterations.
+                q = FrankaRealRobot.collision_free_ik(sim, arm, selfcc, pose, retries=50)
+                if q is not None:
+                    break
+            return pose, q
 
     def _gen_neutral_candidates(
         self, how_many: int, selfcc: FrankaSelfCollisionChecker
@@ -691,6 +707,7 @@ class DresserEnvironment(Environment):
         simple, single-primitive tools like a bar, driller, or box.
         """
         tool_type = np.random.choice(["T_shape", "L_shape", "U_shape", "bar", "driller", "box"])
+        # tool_type = np.random.choice(["box"])
         primitives = []
 
         # Helper to create small random rotations for the entire tool
@@ -698,7 +715,7 @@ class DresserEnvironment(Environment):
             rpy = np.random.uniform(-np.pi / 18, np.pi / 18, 3)  # +/- 10 degrees
             return SO3.from_rpy(rpy[0], rpy[1], rpy[2]).wxyz
         
-        scale_size = 0.7
+        scale_size = 0.8
 
         # Generate a single random rotation for the entire tool (for composite tools)
         tool_rotation_quat = random_tool_rotation_quat()

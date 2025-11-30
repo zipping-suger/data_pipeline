@@ -15,7 +15,7 @@ SCRATCH_TMP="/cluster/scratch/yixili/tmp"  # Custom tmp dir (avoid /tmp issues)
 ENVS=("dresser")
 
 declare -A TASKS=(
-  # [task-oriented]=task
+  [task-oriented]=task
   [neutral]=neutral
   # [free-space]=free
   # [mixed]=mixed

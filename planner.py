@@ -74,8 +74,8 @@ def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylin
             
             # Sample multiple points in the volume for collision checking
             primitive_corners = primitive_cuboid.corners
-            surface_points = primitive_cuboid.sample_surface(20, noise=0.0)
-            all_check_points = np.vstack([primitive_corners, surface_points])
+            # surface_points = primitive_cuboid.sample_surface(0, noise=0.0)
+            all_check_points = np.vstack([primitive_corners])
             
             # Check collision with all obstacles
             for obstacle in obstacles:
@@ -90,6 +90,7 @@ def _check_tool_collision(gripper_pose: SE3, obstacles: List[Union[Cuboid, Cylin
                     return True
                 
     return False
+
 
 def steer_to(start, end, sim, robot, threshold=0.1):
     """
@@ -456,10 +457,10 @@ class FrankaArmPlanner(Planner):
         self.self_collision_checker = checker
 
     def _not_in_collision(self, q):
-        if self.attached_tools is not None and self.obstacles is not None:
-            gripper_pose = self.robot_type.fk(q, eff_frame="right_gripper")
-            if _check_tool_collision(gripper_pose, self.obstacles, self.attached_tools):
-                return False
+        # if self.attached_tools is not None and self.obstacles is not None:
+        #     gripper_pose = self.robot_type.fk(q, eff_frame="right_gripper")
+        #     if _check_tool_collision(gripper_pose, self.obstacles, self.attached_tools):
+        #         return False
         current_time = time.time()
         self.sim_robot.marionette(q)
         if self.sphere_self_collision_checker:
