@@ -41,8 +41,8 @@ for ENV in "${ENVS[@]}"; do
     echo "Creating output directory: $HOST_OUTPUT_DIR"
     mkdir -p "$HOST_OUTPUT_DIR"
     
-    # --- Run Singularity with Proper TMPDIR ---
-    # Bind scratch to /tmp in container
+    # --- Run Singularity with Proper TMPDIR AND Thread Limits ---
+    # We must explicitly pass the thread limits using --env
     singularity exec \
       --nv \
       --containall --writable-tmpfs \
@@ -54,6 +54,11 @@ for ENV in "${ENVS[@]}"; do
       --env NVIDIA_DRIVER_CAPABILITIES=all \
       --env ACCEPT_EULA=Y \
       --env TMPDIR="$SCRATCH_TMP" \
+      --env OPENBLAS_NUM_THREADS=1 \
+      --env OMP_NUM_THREADS=1 \
+      --env MKL_NUM_THREADS=1 \
+      --env VECLIB_MAXIMUM_THREADS=1 \
+      --env NUMEXPR_NUM_THREADS=1 \
       "${CONTAINER_IMAGE}" \
       /usr/bin/python3 -u /data_pipeline/ompl_gen.py "$ENV" "$TYPE" full-pipeline "$OUTPUT_PATH"
 

@@ -26,10 +26,14 @@ cat <<EOT > job.sh
 #SBATCH --mail-user=name@mail
 #SBATCH --job-name="training-${timestamp}"
 
-# Set thread limits
-export OPENBLAS_NUM_THREADS=8
-export OMP_NUM_THREADS=8
-export MKL_NUM_THREADS=8
+# Set thread limits to 1
+# This ensures each Python process uses only 1 CPU core for math ops,
+# preventing the 64x64 thread explosion.
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # Use a custom TMPDIR in scratch (safer than /tmp)
 export TMPDIR=/cluster/scratch/yixili/tmp
